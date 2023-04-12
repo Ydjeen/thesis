@@ -18,6 +18,8 @@ used = "node_memory_used_bytes"
 
 conc_fold = "conc"
 
+colors = []
+
 def transpose_list(l):
     return list(map(list, zip(*l)))
 
@@ -118,9 +120,9 @@ def SMA(data, width):
         start = 0
         if i < width/2:
             start = 0
-            end = width
+            end = width/2 + i*2
         elif (i > len(data) - width/2):
-            start = len(data) - width/2
+            start = len(data) - width/2 + ((i - len(data) - width/2)/2)
             end = len(data)
         else:
             start = i - width/2
@@ -128,7 +130,7 @@ def SMA(data, width):
         start = int(start)
         end = int(end)
         window = data[start:end]
-        window_average = round(np.sum(window)/width, 2)
+        window_average = round(np.sum(window)/(end-start), 2)
         moving_averages.append(window_average)
     return moving_averages
 
@@ -149,12 +151,12 @@ def plot_durations(struct, concurrency, window):
     after_data = transpose_list(rally_data[1])
     #rally_data = (rally_data)
     avg_before = SMA(before_data[1], window)
-    time_before = matplotlib.dates.date2num(before_data[0])
+    time_before = before_data[0]
     avg_after = SMA(after_data[1], window)
-    time_after = matplotlib.dates.date2num(after_data[0])
+    time_after = after_data[0]
     plt.figure().set_figwidth(15)
-    plt.plot(time_before, avg_before)
-    plt.plot(time_after, avg_after)
+    plt.plot(time_before[window//2 : -window//2], avg_before[window//2 : -window//2])
+    plt.plot(time_after[window//2 : -window//2], avg_after[window//2 : -window//2])
     plt.show()
 
 def convertable_to_float(string):
@@ -164,12 +166,37 @@ def convertable_to_float(string):
     except ValueError:
         return False
 
-def plot_metrics(config, conc):
-    metrics_HA = extract_metrics(config, conc)
-    before = metrics_HA[0]
-    after = metrics_HA[1]
+def get_metric_list(config, conc):
+    metrics = extract_metrics(config, conc)
+    before = metrics[0]
+    return list(before["wally190"].keys())
+
+
+def print_metric_names(config, conc):
+    metric_list = get_metric_list(config, conc)
+    last_metric = None
+    to_print = ""
+    for index, metric in enumerate(metric_list):
+        if last_metric:
+            if len(metric.split("_")) > 3 and metric.split("_")[:3] == last_metric.split("_")[:3]:
+                to_print = f'{to_print}{index}:{metric}  '
+            else:
+                print(to_print)
+                to_print = f'{index}:{metric}  '
+        else:
+            to_print = f'{index}:{metric}  '
+        last_metric = metric
+    print(to_print)
+
+
+
+
+def plot_metrics(config, conc, metric):
+    metrics = extract_metrics(config, conc)
+    before = metrics[0]
+    after = metrics[1]
     plt.figure().set_figwidth(15)
-    metric_to_parse = list(before[list(before.keys())[0]].keys())[-10]
+    metric_to_parse = metric
     print(metric_to_parse)
     empty_index = list()
     for i, s in enumerate(before["wally190"][metric_to_parse]):
@@ -186,14 +213,28 @@ def plot_metrics(config, conc):
                     values.pop(index - eliminated)
                     eliminated = eliminated + 1
 
-    time_before = before[list(before.keys())[0]]["timestamp"]
-    time_after = after[list(before.keys())[0]]["timestamp"]
+    time_before = np.array(before[list(before.keys())[0]]["timestamp"]).astype(float)
+    time_after = np.array(after[list(before.keys())[0]]["timestamp"]).astype(float)
     for node, metrics in before.items():
         metric_before = np.array(before[node][metric_to_parse]).astype(float)
         metric_after = np.array(after[node][metric_to_parse]).astype(float)
-        plt.plot(time_before + time_after, np.concatenate((metric_before, metric_after), axis=0), label=node)
+        #plt.plot(np.concatenate((time_before, time_after)), np.concatenate((metric_before, metric_after), axis=0), label=node)
+        plt.plot(time_before, metric_before, label=node)
+        plt.plot(time_after, metric_after, label=node)
+
+    rally_data = extract_rally_output(config, conc)
+    before_data = transpose_list(rally_data[0])
+    after_data = transpose_list(rally_data[1])
+    before_start = before_data[0][0]
+    before_end = before_data[0][-1]
+    after_start = after_data[0][0]
+    after_end = after_data[0][-1]
+    plt.axvline(x=before_start, color='r', label='before start')
+    plt.axvline(x=before_end, color='r', label='before end')
+    plt.axvline(x=after_start, color='r', label='after start')
+    plt.axvline(x=after_end, color='r', label='after end')
     plt.title(metric_to_parse)
-    plt.legend()
+    plt.legend(loc='lower center')
     plt.show()
 
 def analyze_run(struct, conc, window):
@@ -221,6 +262,9 @@ def analyze_all(window):
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
 #analyze_all(30)
-#plot_durations(high_avail_fld, 1, 50)
-plot_metrics(high_avail_fld, 1)
+#plot_durations(high_avail_fld, 4, 100)
 
+
+print_metric_names(high_avail_fld, 1)
+metric = get_metric_list(high_avail_fld, 1)[104]
+plot_metrics(high_avail_fld, 2, metric)

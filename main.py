@@ -7,6 +7,7 @@ import json
 from matplotlib import pyplot as plt
 import csv
 import zipfile
+import pandas as pd
 
 data_folder = 'experiment_results/'
 high_avail_fld = 'high-availability/'
@@ -56,7 +57,7 @@ def get_task_folders(structure, concurrency):
         raise Exception(f'No experience folder provided for {structure} concurrency {concurrency}')
     exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+"/deploy1/rally/"
     if not os.path.isdir(exp_folder):
-        exp_folder = data_folder + structure + conc_fold + str(concurrency) + "/deploy_list/deploy1/rally/"
+        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + "/deploy_list/deploy1/rally/"
     task_folders = next(os.walk(exp_folder))[1]
     task_folders = ['{0}/{1}'.format(exp_folder, subfold) for subfold in task_folders]
     task_folders.sort()
@@ -67,7 +68,7 @@ def get_metrics_folders(structure, concurrency):
         raise Exception(f'No experience folder provided for {structure} concurrency {concurrency}')
     exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+"/deploy1/requests/"
     if not os.path.isdir(exp_folder):
-        exp_folder = data_folder + structure + conc_fold + str(concurrency) + "/deploy_list/deploy1/requests/"
+        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + "/deploy_list/deploy1/requests/"
     task_folders = next(os.walk(exp_folder))[1]
     task_folders = ['{0}/{1}'.format(exp_folder, subfold) for subfold in task_folders]
     task_folders.sort()
@@ -104,8 +105,13 @@ def extract_metrics(structure, concurrency):
                 reader = csv.reader(f)
                 metric_names = reader.__next__()
                 metrics = list()
+                last_time = None
                 for row in reader:
+                    if last_time is not None:
+                        if last_time > float(row[0]):
+                            break
                     metrics.append(row)
+                    last_time = float(row[0])
                 metrics = list(map(list, itertools.zip_longest(*metrics, fillvalue=None)))
                 metrics = dict(zip(metric_names, metrics))
                 result[node.split('.')[0]] = metrics
@@ -150,13 +156,129 @@ def plot_durations(struct, concurrency, window):
     before_data = transpose_list(rally_data[0])
     after_data = transpose_list(rally_data[1])
     #rally_data = (rally_data)
-    avg_before = SMA(before_data[1], window)
-    time_before = before_data[0]
-    avg_after = SMA(after_data[1], window)
-    time_after = after_data[0]
-    plt.figure().set_figwidth(15)
-    plt.plot(time_before[window//2 : -window//2], avg_before[window//2 : -window//2])
-    plt.plot(time_after[window//2 : -window//2], avg_after[window//2 : -window//2])
+
+    time_before = np.array(before_data[0]).astype('float')
+    experiment_start = np.array(time_before[0]).astype('float')
+    time_before = np.array(time_before)
+    time_after = np.array(after_data[0])
+
+    before_df = pd.DataFrame({'timestamp': before_data[0],'duration': before_data[1]})
+    after_df = pd.DataFrame({'timestamp': after_data[0],'duration': after_data[1]})
+    avg_before_df = before_df['duration'].rolling(window=window).mean()
+    avg_after_df = after_df['duration'].rolling(window=window).mean()
+
+    #avg_before = SMA(before_data[1], window)
+    #avg_after = SMA(after_data[1], window)
+
+    full_errors = before_data[2] + after_data[2]
+    full_timesmtamps = np.concatenate((time_before, time_after))
+    error_indexes = [i for i, x in enumerate(full_errors) if len(x)>0]
+
+    error_groups = list()
+
+    for index in error_indexes:
+        if not error_groups:
+            group = list()
+            group.append(index)
+            error_groups.append(group)
+        else:
+            if index - error_groups[-1][-1] <= concurrency and not (error_groups[-1][-1] < len(time_before) and index >= len(time_before)):
+                error_groups[-1].append(index)
+            else:
+                group = list()
+                group.append(index)
+                error_groups.append(group)
+
+    error_time_list = list()
+    for error_group in error_groups:
+        error_time_list.append([full_timesmtamps[index] for index in error_group])
+
+    fig, ax = plt.subplots()
+    fig.set_figwidth(15)
+    ax.plot(time_before, avg_before_df, label="Before rejuvenation")
+    ax.plot(time_after, avg_after_df, label="After rejuvenation")
+    for i, error_time_group in enumerate(error_time_list):
+        ax.axvspan(min(error_time_group), max(error_time_group), alpha=0.3, color='red', label= "_"*i + "Error")
+    ax.plot()
+    #plt.plot(time_before[window//2 : -window//2], avg_before[window//2 : -window//2], label="Before rejuvenation")
+    #plt.plot(time_after[window//2 : -window//2], avg_after[window//2 : -window//2], label="After rejuvenation")
+    plt.ylabel('Workload execution time (sec)')
+    plt.xlabel('Experiment duration (sec)')
+    plt.legend()
+    plt.show()
+
+def plot_durations_for_actions(struct, concurrency, window, to_plot):
+    rally_data = extract_rally_output(struct, concurrency)
+    before_data = transpose_list(rally_data[0])
+    after_data = transpose_list(rally_data[1])
+
+    #rally_data = (rally_data)
+
+    time_before = np.array(before_data[0]).astype('float')
+    experiment_start = np.array(time_before[0]).astype('float')
+    time_before = np.array(time_before)
+    time_after = np.array(after_data[0])
+
+    actions = [action['name'] for action in before_data[3][0]]
+    before_actions = pd.DataFrame(before_data[3])
+    after_actions = pd.DataFrame(after_data[3])
+    #before_actions['timestamp'] = time_before
+    #after_actions['timestamp'] = time_after
+
+
+    before_df = pd.DataFrame({'timestamp': before_data[0],'duration': before_data[1]})
+    after_df = pd.DataFrame({'timestamp': after_data[0],'duration': after_data[1]})
+    avg_before_df = before_df['duration'].rolling(window=window).mean()
+    avg_after_df = after_df['duration'].rolling(window=window).mean()
+
+    #avg_before = SMA(before_data[1], window)
+    #avg_after = SMA(after_data[1], window)
+
+    full_durations = pd.concat((avg_before_df, avg_after_df))
+    full_errors = before_data[2] + after_data[2]
+    full_timesmtamps = np.concatenate((time_before, time_after))
+    error_indexes = [i for i, x in enumerate(full_errors) if len(x)>0]
+
+    error_groups = list()
+
+    for index in error_indexes:
+        if not error_groups:
+            group = list()
+            group.append(index)
+            error_groups.append(group)
+        else:
+            if index - error_groups[-1][-1] <= concurrency and not (error_groups[-1][-1] < len(time_before) and index >= len(time_before)):
+                error_groups[-1].append(index)
+            else:
+                group = list()
+                group.append(index)
+                error_groups.append(group)
+
+    error_time_list = list()
+    for error_group in error_groups:
+        error_time_list.append([full_timesmtamps[index] for index in error_group])
+
+    fig, ax = plt.subplots()
+    fig.set_figwidth(15)
+    not_print = 'delete'
+    for module in to_plot:
+        action_indexes_to_print = [index for index, action in enumerate(actions) if (module in action) and (not_print not in action)]
+        for i in action_indexes_to_print:
+            values = before_actions[i].apply(pd.Series)
+            action_durations = values['finished_at'] - values['started_at']
+            ax.plot(time_before, action_durations.rolling(window=window).mean(), label=values['name'][0])
+
+            values = after_actions[i].apply(pd.Series)
+            action_durations = values['finished_at'] - values['started_at']
+            ax.plot(time_after, action_durations.rolling(window=window).mean(), label=values['name'][0])
+    for i, error_time_group in enumerate(error_time_list):
+        ax.axvspan(min(error_time_group), max(error_time_group), alpha=0.3, color='red', label= "_"*i + "Error")
+    ax.plot()
+    #plt.plot(time_before[window//2 : -window//2], avg_before[window//2 : -window//2], label="Before rejuvenation")
+    #plt.plot(time_after[window//2 : -window//2], avg_after[window//2 : -window//2], label="After rejuvenation")
+    plt.ylabel('Workload execution time (sec)')
+    plt.xlabel('Experiment duration (sec)')
+    plt.legend()
     plt.show()
 
 def convertable_to_float(string):
@@ -189,20 +311,53 @@ def print_metric_names(config, conc):
     print(to_print)
 
 
+def get_error_times(struct, concurrency):
+    rally_data = extract_rally_output(struct, concurrency)
+    before_data = transpose_list(rally_data[0])
+    after_data = transpose_list(rally_data[1])
+    full_errors = before_data[2] + after_data[2]
+
+    time_before = np.array(before_data[0]).astype('float')
+    experiment_start = np.array(time_before[0]).astype('float')
+    time_before = np.array(time_before)
+    time_after = np.array(after_data[0])
+
+    full_timesmtamps = np.concatenate((time_before, time_after))
+    error_indexes = [i for i, x in enumerate(full_errors) if len(x) > 0]
+
+    error_groups = list()
+
+    for index in error_indexes:
+        if not error_groups:
+            group = list()
+            group.append(index)
+            error_groups.append(group)
+        else:
+            if index - error_groups[-1][-1] <= concurrency and not (
+                    error_groups[-1][-1] < len(time_before) and index >= len(time_before)):
+                error_groups[-1].append(index)
+            else:
+                group = list()
+                group.append(index)
+                error_groups.append(group)
+
+    error_time_list = list()
+    for error_group in error_groups:
+        error_time_list.append([full_timesmtamps[index] for index in error_group])
+    return error_time_list
 
 
-def plot_metrics(config, conc, metric):
-    metrics = extract_metrics(config, conc)
+def plot_metrics(struct, conc, window, metric):
+    metrics = extract_metrics(struct, conc)
     before = metrics[0]
     after = metrics[1]
     plt.figure().set_figwidth(15)
     metric_to_parse = metric
-    print(metric_to_parse)
     empty_index = list()
     for i, s in enumerate(before["wally190"][metric_to_parse]):
         if len(s) == 0:
             empty_index.append(i)
-    print(f'empty indexes : {empty_index}')
+    print(f'For metric {metric} the following indexes are empty : {empty_index}')
 
     cleaning = False
     if cleaning:
@@ -213,26 +368,32 @@ def plot_metrics(config, conc, metric):
                     values.pop(index - eliminated)
                     eliminated = eliminated + 1
 
-    time_before = np.array(before[list(before.keys())[0]]["timestamp"]).astype(float)
-    time_after = np.array(after[list(before.keys())[0]]["timestamp"]).astype(float)
     for node, metrics in before.items():
-        metric_before = np.array(before[node][metric_to_parse]).astype(float)
-        metric_after = np.array(after[node][metric_to_parse]).astype(float)
+        empty_indexes = [i for i, e in enumerate(before[node][metric_to_parse]) if e == '']
+        for ind in empty_indexes:
+            before[node][metric_to_parse][ind] = None
+        empty_indexes = [i for i, e in enumerate(after[node][metric_to_parse]) if e == '']
+        for ind in empty_indexes:
+            after[node][metric_to_parse][ind] = None
+        metric_before = pd.DataFrame(before[node][metric_to_parse]).astype(float).rolling(window=window).mean()
+        metric_after = pd.DataFrame(after[node][metric_to_parse]).astype(float).rolling(window=window).mean()
+        time_before = np.array(before[node]["timestamp"]).astype(float)
+        time_after = np.array(after[node]["timestamp"]).astype(float)
         #plt.plot(np.concatenate((time_before, time_after)), np.concatenate((metric_before, metric_after), axis=0), label=node)
-        plt.plot(time_before, metric_before, label=node)
-        plt.plot(time_after, metric_after, label=node)
+        plt.plot(np.concatenate((time_before, time_after)), pd.concat((metric_before, metric_after)), label=node)
 
-    rally_data = extract_rally_output(config, conc)
+    rally_data = extract_rally_output(struct, conc)
     before_data = transpose_list(rally_data[0])
     after_data = transpose_list(rally_data[1])
     before_start = before_data[0][0]
     before_end = before_data[0][-1]
     after_start = after_data[0][0]
     after_end = after_data[0][-1]
-    plt.axvline(x=before_start, color='r', label='before start')
-    plt.axvline(x=before_end, color='r', label='before end')
-    plt.axvline(x=after_start, color='r', label='after start')
-    plt.axvline(x=after_end, color='r', label='after end')
+    plt.axvspan(before_start, before_end, alpha=0.05, color='blue', label="First run")
+    plt.axvspan(after_start, after_end, alpha=0.05, color='green', label="Second run")
+    error_groups = get_error_times(struct, conc)
+    for i, error_time_group in enumerate(error_groups):
+        plt.axvspan(min(error_time_group), max(error_time_group), alpha=0.3, color='red', label="_" * i + "Error")
     plt.title(metric_to_parse)
     plt.legend(loc='lower center')
     plt.show()
@@ -262,9 +423,12 @@ def analyze_all(window):
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
 #analyze_all(30)
-#plot_durations(high_avail_fld, 4, 100)
+plot_durations(all_in_one_fld, 1, 20)
+
+#plot_durations_for_actions(high_avail_fld, 2, 20, ['nova.boot'])
 
 
-print_metric_names(high_avail_fld, 1)
-metric = get_metric_list(high_avail_fld, 1)[104]
-plot_metrics(high_avail_fld, 2, metric)
+
+#print_metric_names(all_in_one_fld, 1)
+#metric = get_metric_list(all_in_one_fld, 1)[120]
+#plot_metrics(all_in_one_fld, 1, 20, metric)

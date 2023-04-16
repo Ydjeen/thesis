@@ -151,7 +151,7 @@ def SMA_taken(data, width):
         i += 1
     return moving_averages
 
-def plot_durations(struct, concurrency, window):
+def plot_durations(struct, concurrency, window=1, bar=False):
     rally_data = extract_rally_output(struct, concurrency)
     before_data = transpose_list(rally_data[0])
     after_data = transpose_list(rally_data[1])
@@ -166,6 +166,10 @@ def plot_durations(struct, concurrency, window):
     after_df = pd.DataFrame({'timestamp': after_data[0],'duration': after_data[1]})
     avg_before_df = before_df['duration'].rolling(window=window).mean()
     avg_after_df = after_df['duration'].rolling(window=window).mean()
+    bar_before_df = list(map(np.mean, np.array_split(before_df['duration'], 24)))
+    bar_after_df = list(map(np.mean, np.array_split(after_df['duration'], 1)))
+    bar_time_before = list(map(np.mean, np.array_split(time_before, 24)))
+    bar_time_after = list(map(np.mean, np.array_split(time_after, 1)))
 
     #avg_before = SMA(before_data[1], window)
     #avg_after = SMA(after_data[1], window)
@@ -205,6 +209,22 @@ def plot_durations(struct, concurrency, window):
     plt.ylabel('Workload execution time (sec)')
     plt.xlabel('Experiment duration (sec)')
     plt.legend()
+    plt.title("Durations")
+    plt.show()
+
+
+    fig.set_figwidth(15)
+    plt.bar(bar_time_before, bar_before_df, width=2000, label="Before rejuvenation")
+    plt.bar(bar_time_after, bar_after_df, width=2000, label="After rejuvenation")
+    plt.ylim(min((bar_before_df + bar_after_df)) * (9/10))
+    for i, error_time_group in enumerate(error_time_list):
+       ax.axvspan(min(error_time_group), max(error_time_group), alpha=0.3, color='red', label="_" * i + "Error")
+    # plt.plot(time_before[window//2 : -window//2], avg_before[window//2 : -window//2], label="Before rejuvenation")
+    # plt.plot(time_after[window//2 : -window//2], avg_after[window//2 : -window//2], label="After rejuvenation")
+    plt.ylabel('Workload execution time (sec)')
+    plt.xlabel('Experiment duration (sec)')
+    plt.legend()
+    plt.title("bars")
     plt.show()
 
 def plot_durations_for_actions(struct, concurrency, window, to_plot):
@@ -423,7 +443,7 @@ def analyze_all(window):
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
 #analyze_all(30)
-plot_durations(all_in_one_fld, 1, 20)
+plot_durations(high_avail_fld, 4, 20)
 
 #plot_durations_for_actions(high_avail_fld, 2, 20, ['nova.boot'])
 

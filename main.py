@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt
 import csv
 import zipfile
 import pandas as pd
+from numpy import ndarray
 
 data_folder = 'experiment_results/'
 high_avail_fld = 'high-availability/'
@@ -79,9 +80,8 @@ def extract_rally_output(structure, concurrency):
     task_folders = get_task_folders(structure, concurrency)
     task_data_all = get_task_data_list(task_folders)
     data = list()
-    before = [task for task in task_data_all if task['runner']['constant_for_duration']['duration'] == 86400][0]
-    after = [task for task in task_data_all if task['runner']['constant_for_duration']['duration'] != 86400][0]
-    for task_data in [before, after]:
+    tasks = sorted(task_data_all, key=lambda d: d['start_time'])
+    for task_data in tasks:
         workload_data = list()
         for workload_info in task_data['data']:
             workload_data.append([workload_info['timestamp'], workload_info['duration']
@@ -151,17 +151,59 @@ def SMA_taken(data, width):
         i += 1
     return moving_averages
 
+def get_chunk_amount(df: pd.DataFrame):
+    return round((df.timestamp.max() - df.timestamp.min()) / 3600)
+
 def plot_durations(struct, concurrency, window=1, bar=False):
     rally_data = extract_rally_output(struct, concurrency)
-    before_data = transpose_list(rally_data[0])
-    after_data = transpose_list(rally_data[1])
     #rally_data = (rally_data)
 
-    time_before = np.array(before_data[0]).astype('float')
-    experiment_start = np.array(time_before[0]).astype('float')
-    time_before = np.array(time_before)
-    time_after = np.array(after_data[0])
+    requests_bar = list()
+    requests_df = list(map(lambda execution: pd.DataFrame(execution), rally_data))
 
+    request_df_bar_list = list()
+    for request in requests_df:
+        request.columns=['timestamp', 'duration', 'error', 'actions']
+        chunk_amount = get_chunk_amount(request)
+        chunk_size = round(len(request) / get_chunk_amount(request))
+
+        bar_time = list()
+        bar_duration = list()
+        bar_successfull_runs = list()
+        bar_failed_runs = list()
+        for i in range(get_chunk_amount(request)):
+            chunk_start = request['timestamp'].min() + (i * 3600)
+            chunk_end = request['timestamp'].min() + ((i+1) * 3600)
+            chunk = request[request['timestamp'].between(chunk_start, chunk_end)]
+            bar_time.append(chunk['timestamp'].mean())
+            errors = chunk.apply(lambda x: True if x['error'] else False, axis=1)
+            success = ~errors
+            dur = chunk['duration'][success].mean()
+            ##TODO IF dur = float.nan not working
+            if dur==float.nan:
+                dur = 0
+            bar_duration.append(dur)
+            bar_successfull_runs.append(len(chunk[success]))
+            bar_failed_runs.append(len(chunk[errors]))
+        bar_data = pd.DataFrame()
+        bar_data['timestamp'] = bar_time
+        bar_data['duration'] = bar_duration
+        bar_data['successfull_runs'] = bar_successfull_runs
+        bar_data['failed_runs'] = bar_failed_runs
+        request_df_bar_list.append(bar_data)
+    for request_bar in request_df_bar_list:
+        plt.bar(request_bar['timestamp'], request_bar['duration'], width=2000)
+    plt.title("Duration")
+    plt.show()
+    for request_bar in request_df_bar_list:
+        plt.bar(request_bar['timestamp'], request_bar['failed_runs'], width=2000)
+    plt.title("Failed")
+    plt.show()
+    for request_bar in request_df_bar_list:
+        plt.bar(request_bar['timestamp'], request_bar['successfull_runs'], width=2000)
+    plt.title("Success")
+    plt.show()
+    return
     before_df = pd.DataFrame({'timestamp': before_data[0],'duration': before_data[1]})
     after_df = pd.DataFrame({'timestamp': after_data[0],'duration': after_data[1]})
     avg_before_df = before_df['duration'].rolling(window=window).mean()
@@ -212,8 +254,8 @@ def plot_durations(struct, concurrency, window=1, bar=False):
     plt.title("Durations")
     plt.show()
 
-
-    fig.set_figwidth(15)
+    fig, ax = plt.subplots()
+    fig.set_figwidth(12)
     plt.bar(bar_time_before, bar_before_df, width=2000, label="Before rejuvenation")
     plt.bar(bar_time_after, bar_after_df, width=2000, label="After rejuvenation")
     plt.ylim(min((bar_before_df + bar_after_df)) * (9/10))
@@ -443,12 +485,16 @@ def analyze_all(window):
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
 #analyze_all(30)
-plot_durations(high_avail_fld, 4, 20)
+struct = high_avail_fld
+conc = 8
+window = 20
 
-#plot_durations_for_actions(high_avail_fld, 2, 20, ['nova.boot'])
+plot_durations(struct, conc, window)
 
+plot_durations_for_actions(struct, conc, window, ['nova.boot'])
 
-
-#print_metric_names(all_in_one_fld, 1)
-#metric = get_metric_list(all_in_one_fld, 1)[120]
-#plot_metrics(all_in_one_fld, 1, 20, metric)
+print_metric_names(struct, conc)
+metrics=['node_memory_available_bytes_node_memory_MemAvailable_bytes', 'node_memory_swap_used_bytes', 'node_cpu_utilisation_avg', 'available_space_/dev/mapper/vg0-root_ext4_/']
+metric = get_metric_list(struct, conc)[0]
+for metric in metrics:
+    plot_metrics(struct, conc, window, metric)

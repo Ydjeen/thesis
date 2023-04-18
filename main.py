@@ -1,4 +1,5 @@
 import itertools
+import math
 import os
 
 import matplotlib
@@ -162,6 +163,7 @@ def plot_durations(struct, concurrency, window=1, bar=False):
     requests_df = list(map(lambda execution: pd.DataFrame(execution), rally_data))
 
     request_df_bar_list = list()
+    timestamp_start = requests_df[0][0].min()
     for request in requests_df:
         request.columns=['timestamp', 'duration', 'error', 'actions']
         chunk_amount = get_chunk_amount(request)
@@ -179,29 +181,39 @@ def plot_durations(struct, concurrency, window=1, bar=False):
             errors = chunk.apply(lambda x: True if x['error'] else False, axis=1)
             success = ~errors
             dur = chunk['duration'][success].mean()
-            ##TODO IF dur = float.nan not working
-            if dur==float.nan:
+            if math.isnan(dur):
                 dur = 0
+            ##TODO IF dur = float.nan not working
             bar_duration.append(dur)
             bar_successfull_runs.append(len(chunk[success]))
             bar_failed_runs.append(len(chunk[errors]))
         bar_data = pd.DataFrame()
         bar_data['timestamp'] = bar_time
+        bar_data['hour'] = (bar_data['timestamp']-timestamp_start)/3600
         bar_data['duration'] = bar_duration
-        bar_data['successfull_runs'] = bar_successfull_runs
+        bar_data['successful_runs'] = bar_successfull_runs
         bar_data['failed_runs'] = bar_failed_runs
         request_df_bar_list.append(bar_data)
+    min = 9999
     for request_bar in request_df_bar_list:
-        plt.bar(request_bar['timestamp'], request_bar['duration'], width=2000)
-    plt.title("Duration")
+        plt.bar(request_bar['hour'], request_bar['duration'])
+        curr_min = request_bar['duration'][request_bar['duration'] > 0].min()
+        if curr_min < min:
+            min = curr_min
+    if not min == 9999:
+        plt.ylim(bottom = min*(2/3))
+    plt.ylabel("Average workload duration (sec)")
+    plt.xlabel("Experiment duration (hour)")
     plt.show()
     for request_bar in request_df_bar_list:
-        plt.bar(request_bar['timestamp'], request_bar['failed_runs'], width=2000)
-    plt.title("Failed")
+        plt.bar(request_bar['hour'], request_bar['failed_runs'])
+    plt.ylabel("Failed workloads")
+    plt.xlabel("Experiment duration (hour)")
     plt.show()
     for request_bar in request_df_bar_list:
-        plt.bar(request_bar['timestamp'], request_bar['successfull_runs'], width=2000)
-    plt.title("Success")
+        plt.bar(request_bar['hour'], request_bar['successful_runs'])
+    plt.ylabel("Successful workloads")
+    plt.xlabel("Experiment duration (hour)")
     plt.show()
     return
     before_df = pd.DataFrame({'timestamp': before_data[0],'duration': before_data[1]})
@@ -485,8 +497,8 @@ def analyze_all(window):
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
 #analyze_all(30)
-struct = high_avail_fld
-conc = 8
+struct = all_in_one_fld
+conc = 1
 window = 20
 
 plot_durations(struct, conc, window)

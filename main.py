@@ -54,12 +54,12 @@ def get_task_data_list(task_folders):
             result.append(extract_json_data(report_json))
     return result
 
-def get_task_folders(structure, concurrency):
+def get_task_folders(structure, concurrency, iteration=1):
     if not ensure_exp_folder(structure, concurrency):
         raise Exception(f'No experience folder provided for {structure} concurrency {concurrency}')
     exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+"/deploy1/rally/"
     if not os.path.isdir(exp_folder):
-        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + "/deploy_list/deploy1/rally/"
+        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + f"/deploy_list/deploy{iteration}/rally/"
     task_folders = next(os.walk(exp_folder))[1]
     task_folders = ['{0}/{1}'.format(exp_folder, subfold) for subfold in task_folders]
     task_folders.sort()
@@ -77,8 +77,8 @@ def get_metrics_folders(structure, concurrency):
     return task_folders
 
 
-def extract_rally_output(structure, concurrency):
-    task_folders = get_task_folders(structure, concurrency)
+def extract_rally_output(structure, concurrency, iteration=1):
+    task_folders = get_task_folders(structure, concurrency, iteration)
     task_data_all = get_task_data_list(task_folders)
     data = list()
     tasks = sorted(task_data_all, key=lambda d: d['start_time'])
@@ -155,15 +155,111 @@ def SMA_taken(data, width):
 def get_chunk_amount(df: pd.DataFrame):
     return round((df.timestamp.max() - df.timestamp.min()) / 3600)
 
-def plot_durations(struct, concurrency, window=1, bar=False):
-    rally_data = extract_rally_output(struct, concurrency)
-    #rally_data = (rally_data)
+
+def metrics_data_to_df(metrics_data):
+    metric_dfs = {}
+    for run in metrics:
+        for node, metrics in run.items():
+            if node_to_plot:
+                if node not in node_to_plot:
+                    continue
+            if node in metric_dfs.keys():
+                temp = pd.concat([pd.DataFrame({"timestampt": [np.nan]}), pd.DataFrame(metrics)], ignore_index=True)
+                metric_dfs[node] = pd.concat([metric_dfs[node], temp], ignore_index=True)
+            else:
+                metric_dfs[node] = pd.DataFrame(metrics)
+
+
+def get_experiment_data_bars(struct, conc, iteration, window):
+    rally_data_all = extract_rally_output(struct, conc, iteration)
+    rally_data_all = list(map(lambda execution: pd.DataFrame(execution), rally_data_all))
+    for data in rally_data_all:
+        data.columns = ['timestamp', 'duration', 'error', 'actions']
+        data['timestamp'] = data['timestamp'].replace(r'^\s*$', np.nan, regex=True).astype('float')
+        data['duration'] = data['duration'].replace(r'^\s*$', np.nan, regex=True).astype('float')
+    metrics_data_all = extract_metrics(struct, conc)
+    all_runs = list()
+    timestamp_start = None
+    initial_performance = None
+    for i in range(max(len(rally_data_all), len(metrics_data_all))):
+        rally_data = None
+        metric_data = None
+        rally_timestamp_range = None
+        metrics_timestamp_range = None
+        if len(rally_data_all) > i:
+            rally_data = rally_data_all[i]
+            rally_timestamp_range = (rally_data['timestamp'].min(), rally_data['timestamp'].max())
+
+        if len(metrics_data_all) > i:
+            metric_data = metrics_data_all[i]
+            metric_dfs = {}
+            for node, data in metric_data.items():
+                metric_dfs[node] = pd.DataFrame(data).replace(r'^\s*$', np.nan, regex=True).astype('float')
+                if not metrics_timestamp_range:
+                    metrics_timestamp_range = (metric_dfs[node]['timestamp'].min(), metric_dfs[node]['timestamp'].max())
+            metric_data = metric_dfs
+        timestamp_range = rally_timestamp_range
+        if not timestamp_start:
+            timestamp_start = timestamp_range[0]
+        #reset timestmap start point
+        rally_data['timestamp'] = rally_data['timestamp'] - timestamp_start
+        for node, df in metric_data.items():
+            df['timestamp'] = df['timestamp'] - timestamp_start
+
+        bar_rally_data = {}
+        total_chunks = int(round(((timestamp_range[1] - timestamp_range[0])/3600)))
+
+        bar_metric_data = {}
+        for node in metric_data:
+            bar_metric_data[node] = pd.DataFrame()
+        bar_time = list()
+        bar_duration = list()
+        bar_successfull_runs = list()
+        bar_failed_runs = list()
+        for i in range(total_chunks):
+            chunk_start = rally_data['timestamp'].min() + (i * 3600)
+            chunk_end = rally_data['timestamp'].min() + ((i+1) * 3600)
+            chunk = rally_data[rally_data['timestamp'].between(chunk_start, chunk_end)]
+            bar_time.append(chunk['timestamp'].mean())
+            errors = chunk.apply(lambda x: True if x['error'] else False, axis=1)
+            success = ~errors
+            dur = chunk['duration'][success].mean()
+            if math.isnan(dur):
+                dur = 0
+            ##TODO IF dur = float.nan not working
+            bar_duration.append(dur)
+            bar_successfull_runs.append(len(chunk[success]))
+            bar_failed_runs.append(len(chunk[errors]))
+
+            for node in bar_metric_data:
+                chunk_avg = metric_data[node][metric_data[node]['timestamp'].between(chunk_start, chunk_end)].mean()
+                bar_metric_data[node] = pd.concat((bar_metric_data[node], pd.DataFrame(chunk_avg).T), ignore_index=True)
+        bar_rally_data = pd.DataFrame()
+        bar_rally_data['timestamp'] = bar_time
+        bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / 3600) - 0.5).round() + 0.5
+        bar_rally_data['duration'] = bar_duration
+        bar_rally_data['successful_runs'] = bar_successfull_runs
+        bar_rally_data['failed_runs'] = bar_failed_runs
+        if not initial_performance:
+            initial_performance = bar_duration[0]
+        bar_rally_data['performance_change'] = (bar_rally_data['duration'] - initial_performance) / (
+                initial_performance / 100) + 100
+        all_runs.append((bar_rally_data, bar_metric_data))
+    return all_runs
+
+
+
+
+
+def plot_durations(struct, concurrency, iteration=1, window=1, bar=False):
+    rally_data = extract_rally_output(struct, concurrency, iteration)
 
     requests_bar = list()
     requests_df = list(map(lambda execution: pd.DataFrame(execution), rally_data))
 
     request_df_bar_list = list()
     timestamp_start = requests_df[0][0].min()
+    initial_performance = None
     for request in requests_df:
         request.columns=['timestamp', 'duration', 'error', 'actions']
         chunk_amount = get_chunk_amount(request)
@@ -173,6 +269,7 @@ def plot_durations(struct, concurrency, window=1, bar=False):
         bar_duration = list()
         bar_successfull_runs = list()
         bar_failed_runs = list()
+
         for i in range(get_chunk_amount(request)):
             chunk_start = request['timestamp'].min() + (i * 3600)
             chunk_end = request['timestamp'].min() + ((i+1) * 3600)
@@ -189,10 +286,13 @@ def plot_durations(struct, concurrency, window=1, bar=False):
             bar_failed_runs.append(len(chunk[errors]))
         bar_data = pd.DataFrame()
         bar_data['timestamp'] = bar_time
-        bar_data['hour'] = (bar_data['timestamp']-timestamp_start)/3600
+        bar_data['hour'] = (((bar_data['timestamp']-timestamp_start)/3600)-0.5).round() + 0.5
         bar_data['duration'] = bar_duration
         bar_data['successful_runs'] = bar_successfull_runs
         bar_data['failed_runs'] = bar_failed_runs
+        if not initial_performance:
+            initial_performance = bar_duration[0]
+        bar_data['performance_change'] = (bar_data['duration'] - initial_performance)/(initial_performance/100) + 100
         request_df_bar_list.append(bar_data)
     min = 9999
     for request_bar in request_df_bar_list:
@@ -204,6 +304,7 @@ def plot_durations(struct, concurrency, window=1, bar=False):
         plt.ylim(bottom = min*(2/3))
     plt.ylabel("Average workload duration (sec)")
     plt.xlabel("Experiment duration (hour)")
+    plt.grid()
     plt.show()
     for request_bar in request_df_bar_list:
         plt.bar(request_bar['hour'], request_bar['failed_runs'])
@@ -213,6 +314,11 @@ def plot_durations(struct, concurrency, window=1, bar=False):
     for request_bar in request_df_bar_list:
         plt.bar(request_bar['hour'], request_bar['successful_runs'])
     plt.ylabel("Successful workloads")
+    plt.xlabel("Experiment duration (hour)")
+    plt.show()
+    for request_bar in request_df_bar_list:
+        plt.bar(request_bar['hour'], request_bar['performance_change'])
+    plt.ylabel("Performance change (%), relative to the first hour")
     plt.xlabel("Experiment duration (hour)")
     plt.show()
     return
@@ -364,8 +470,9 @@ def convertable_to_float(string):
 
 def get_metric_list(config, conc):
     metrics = extract_metrics(config, conc)
-    before = metrics[0]
-    return list(before["wally190"].keys())
+    first_node = list(metrics[0].keys())[0]
+    return list(metrics[0][first_node].keys())
+
 
 
 def print_metric_names(config, conc):
@@ -421,34 +528,84 @@ def get_error_times(struct, concurrency):
     return error_time_list
 
 
-def plot_metrics(struct, conc, window, metric):
+def plot_metrics(struct, conc, metric, iteration = 1, window = 20, node_to_plot = None):
     metrics = extract_metrics(struct, conc)
-    before = metrics[0]
-    after = metrics[1]
-    plt.figure().set_figwidth(15)
+    metric_dfs = {}
+    for run in metrics:
+        for node, metrics in run.items():
+            if node_to_plot:
+                if node not in node_to_plot:
+                    continue
+            if node in metric_dfs.keys():
+                temp = pd.concat([pd.DataFrame({"timestampt":[np.nan]}), pd.DataFrame(metrics)], ignore_index=True)
+                metric_dfs[node] = pd.concat([metric_dfs[node], temp], ignore_index=True)
+            else:
+                metric_dfs[node] = pd.DataFrame(metrics)
     metric_to_parse = metric
-    empty_index = list()
-    for i, s in enumerate(before["wally190"][metric_to_parse]):
-        if len(s) == 0:
-            empty_index.append(i)
-    print(f'For metric {metric} the following indexes are empty : {empty_index}')
+
 
     cleaning = False
     if cleaning:
+        empty_index = list()
+        for i, s in enumerate(metric_dfs[0]["wally190"][metric_to_parse]):
+            if len(s) == 0:
+                empty_index.append(i)
+        print(f'For metric {metric} the following indexes are empty : {empty_index}')
         for node, metrics in before.items():
             for metric, values in metrics.items():
                 eliminated = 0
                 for index in empty_index:
                     values.pop(index - eliminated)
                     eliminated = eliminated + 1
+    for node, df in metric_dfs.items():
+        df['timestamp'] = df['timestamp'].astype('float')
+
+    timestamp_start = metric_dfs[list(metric_dfs.keys())[0]]['timestamp'].min()
+    for node, df in metric_dfs.items():
+        metric_dfs[node] = metric_dfs[node].replace(r'^\s*$', np.nan, regex=True)
+        metric_dfs[node]['hour'] = (df['timestamp'] - timestamp_start)/3600
+        metric_dfs[node] = metric_dfs[node].astype('float')
+
+    for node, df in metric_dfs.items():
+        plt.plot(df['hour'], df[metric_to_parse], label=node)
+    plt.title(metric_to_parse)
+    plt.show()
+
+    initial_performance = None
+    request_df_bar_list = {}
+    for node, df in metric_dfs.items():
+
+        bar_time = list()
+        bar_metric = list()
+        bar_successfull_runs = list()
+        bar_failed_runs = list()
+        chunk_amount = int(((df['timestamp'].max() - df['timestamp'].min()) / 3600).round())
+        for i in range(chunk_amount):
+            chunk_start = df['timestamp'].min() + (i * 3600)
+            chunk_end = df['timestamp'].min() + ((i+1) * 3600)
+            chunk = df[df['timestamp'].between(chunk_start, chunk_end)]
+            bar_time.append(chunk['timestamp'].mean())
+            value = chunk[metric_to_parse].mean()
+            if math.isnan(value):
+                value = 0
+            bar_metric.append(value)
+        bar_data = pd.DataFrame()
+        bar_data['timestamp'] = bar_time
+        bar_data['hour'] = (((bar_data['timestamp']-timestamp_start)/3600)-0.5).round() + 0.5
+        bar_data['value'] = bar_metric
+        if not initial_performance:
+            initial_performance = bar_metric[0]
+        bar_data['performance_change'] = (bar_data['value'] - initial_performance)/(initial_performance/100) + 100
+
+        request_df_bar_list[node] = bar_data
+
+    for node, bar_data in request_df_bar_list.items():
+        plt.stem(bar_data['hour'], bar_data['value'])
+    plt.show()
+    return
+
 
     for node, metrics in before.items():
-        empty_indexes = [i for i, e in enumerate(before[node][metric_to_parse]) if e == '']
-        for ind in empty_indexes:
-            before[node][metric_to_parse][ind] = None
-        empty_indexes = [i for i, e in enumerate(after[node][metric_to_parse]) if e == '']
-        for ind in empty_indexes:
-            after[node][metric_to_parse][ind] = None
         metric_before = pd.DataFrame(before[node][metric_to_parse]).astype(float).rolling(window=window).mean()
         metric_after = pd.DataFrame(after[node][metric_to_parse]).astype(float).rolling(window=window).mean()
         time_before = np.array(before[node]["timestamp"]).astype(float)
@@ -496,17 +653,55 @@ def analyze_all(window):
         print(f" start:mid:end:reset avg duration ")
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
+def get_bar_change(full_data):
+    initial_value = full_data[0][0]
+    change = list()
+    for data in full_data:
+        change.append((data - initial_value) / (initial_value / 100) + 100)
+    return change
+
+def plot_bars(s, metric):
+    for (rally_data, metric_data) in s:
+        for node in metric_data:
+            plt.bar(rally_data['hour'], metric_data[node][metric])
+    plt.show()
+    controller_node = list(s[0][1].keys())[0]
+    duration_performance_change = get_bar_change(list(map(lambda data: data[0]['duration'], s)))
+    swap_amount_change = get_bar_change(list(map(lambda data: data[1][controller_node][metric], s)))
+    for i in range(len(s)):
+        plt.bar(s[i][0]['hour'], swap_amount_change[i], label="_" * i + "Swap usage change")
+        plt.bar(s[i][0]['hour'], duration_performance_change[i], label= "_"*i + "WL duration change")
+    plt.legend()
+    plt.show()
+
 #analyze_all(30)
 struct = all_in_one_fld
-conc = 1
+conc = 8
+iterations = [2]
 window = 20
 
-plot_durations(struct, conc, window)
+bars = True
+dur = False
+metr = True
 
-plot_durations_for_actions(struct, conc, window, ['nova.boot'])
+if bars:
+    for iteration in iterations:
+        s = get_experiment_data_bars(struct, conc, iteration=iteration, window=window)
+        plot_bars(s, 'node_memory_swap_used_bytes')
 
-print_metric_names(struct, conc)
-metrics=['node_memory_available_bytes_node_memory_MemAvailable_bytes', 'node_memory_swap_used_bytes', 'node_cpu_utilisation_avg', 'available_space_/dev/mapper/vg0-root_ext4_/']
-metric = get_metric_list(struct, conc)[0]
-for metric in metrics:
-    plot_metrics(struct, conc, window, metric)
+if dur:
+    for iteration in iterations:
+        plot_durations(struct, conc, iteration=iteration, window=window)
+
+#plot_durations_for_actions(struct, conc, window, ['nova.boot'])
+
+#metrics=['node_memory_available_bytes_node_memory_MemAvailable_bytes', 'node_memory_swap_used_bytes', 'node_cpu_utilisation_avg', 'available_space_/dev/mapper/vg0-root_ext4_/']
+metrics=['node_memory_swap_used_bytes']
+
+if metr:
+    print_metric_names(struct, conc)
+    metric = get_metric_list(struct, conc)[0]
+    for iteration in iterations:
+        for metric in metrics:
+            plot_metrics(struct, conc, metric, iteration=iteration, window = window, node_to_plot="wally194")
+

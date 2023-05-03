@@ -1,6 +1,7 @@
 import itertools
 import math
 import os
+import re
 
 import matplotlib
 import numpy as np
@@ -57,7 +58,7 @@ def get_task_data_list(task_folders):
 def get_task_folders(structure, concurrency, iteration=1):
     if not ensure_exp_folder(structure, concurrency):
         raise Exception(f'No experience folder provided for {structure} concurrency {concurrency}')
-    exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+"/deploy1/rally/"
+    exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+f"/deploy{iteration}/rally/"
     if not os.path.isdir(exp_folder):
         exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + f"/deploy_list/deploy{iteration}/rally/"
     task_folders = next(os.walk(exp_folder))[1]
@@ -65,12 +66,12 @@ def get_task_folders(structure, concurrency, iteration=1):
     task_folders.sort()
     return task_folders
 
-def get_metrics_folders(structure, concurrency):
+def get_metrics_folders(structure, concurrency, iteration=1):
     if not ensure_exp_folder(structure, concurrency):
         raise Exception(f'No experience folder provided for {structure} concurrency {concurrency}')
-    exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+"/deploy1/requests/"
+    exp_folder = data_folder+structure+'/'+conc_fold+str(concurrency)+f"/deploy{iteration}/requests/"
     if not os.path.isdir(exp_folder):
-        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + "/deploy_list/deploy1/requests/"
+        exp_folder = data_folder + structure + '/' + conc_fold + str(concurrency) + f"/deploy_list/deploy{iteration}/requests/"
     task_folders = next(os.walk(exp_folder))[1]
     task_folders = ['{0}/{1}'.format(exp_folder, subfold) for subfold in task_folders]
     task_folders.sort()
@@ -90,11 +91,11 @@ def extract_rally_output(structure, concurrency, iteration=1):
         data.append(workload_data)
     return data
 
-def extract_metrics(structure, concurrency):
+def extract_metrics(structure, concurrency, iteration = 1):
 
     metric_names = None
-    task_folders = get_task_folders(structure, concurrency)
-    metrics_folders = get_metrics_folders(structure, concurrency)
+    task_folders = get_task_folders(structure, concurrency, iteration)
+    metrics_folders = get_metrics_folders(structure, concurrency, iteration)
     metrics_folders.sort()
     all_results = list()
     for task_folder in metrics_folders:
@@ -177,7 +178,7 @@ def get_experiment_data_bars(struct, conc, iteration, window):
         data.columns = ['timestamp', 'duration', 'error', 'actions']
         data['timestamp'] = data['timestamp'].replace(r'^\s*$', np.nan, regex=True).astype('float')
         data['duration'] = data['duration'].replace(r'^\s*$', np.nan, regex=True).astype('float')
-    metrics_data_all = extract_metrics(struct, conc)
+    metrics_data_all = extract_metrics(struct, conc, iteration)
     all_runs = list()
     timestamp_start = None
     initial_performance = None
@@ -199,19 +200,23 @@ def get_experiment_data_bars(struct, conc, iteration, window):
                     metrics_timestamp_range = (metric_dfs[node]['timestamp'].min(), metric_dfs[node]['timestamp'].max())
             metric_data = metric_dfs
         timestamp_range = rally_timestamp_range
+        if not timestamp_range:
+            timestamp_range = metrics_timestamp_range
         if not timestamp_start:
             timestamp_start = timestamp_range[0]
         #reset timestmap start point
         rally_data['timestamp'] = rally_data['timestamp'] - timestamp_start
-        for node, df in metric_data.items():
-            df['timestamp'] = df['timestamp'] - timestamp_start
+        if metric_data:
+            for node, df in metric_data.items():
+                df['timestamp'] = df['timestamp'] - timestamp_start
 
         bar_rally_data = {}
         total_chunks = int(round(((timestamp_range[1] - timestamp_range[0])/3600)))
 
         bar_metric_data = {}
-        for node in metric_data:
-            bar_metric_data[node] = pd.DataFrame()
+        if metric_data:
+            for node in metric_data:
+                bar_metric_data[node] = pd.DataFrame()
         bar_time = list()
         bar_duration = list()
         bar_successfull_runs = list()
@@ -230,10 +235,12 @@ def get_experiment_data_bars(struct, conc, iteration, window):
             bar_duration.append(dur)
             bar_successfull_runs.append(len(chunk[success]))
             bar_failed_runs.append(len(chunk[errors]))
+            if metric_data:
+                for node in bar_metric_data:
+                    chunk_avg = metric_data[node][metric_data[node]['timestamp'].between(chunk_start, chunk_end)].mean()
+                    chunk_avg['hour'] = (((chunk_avg['timestamp']) / 3600) - 0.5).round() + 0.5
+                    bar_metric_data[node] = pd.concat((bar_metric_data[node], pd.DataFrame(chunk_avg).T), ignore_index=True)
 
-            for node in bar_metric_data:
-                chunk_avg = metric_data[node][metric_data[node]['timestamp'].between(chunk_start, chunk_end)].mean()
-                bar_metric_data[node] = pd.concat((bar_metric_data[node], pd.DataFrame(chunk_avg).T), ignore_index=True)
         bar_rally_data = pd.DataFrame()
         bar_rally_data['timestamp'] = bar_time
         bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / 3600) - 0.5).round() + 0.5
@@ -246,10 +253,6 @@ def get_experiment_data_bars(struct, conc, iteration, window):
                 initial_performance / 100) + 100
         all_runs.append((bar_rally_data, bar_metric_data))
     return all_runs
-
-
-
-
 
 def plot_durations(struct, concurrency, iteration=1, window=1, bar=False):
     rally_data = extract_rally_output(struct, concurrency, iteration)
@@ -305,8 +308,10 @@ def plot_durations(struct, concurrency, iteration=1, window=1, bar=False):
     plt.ylabel("Average workload duration (sec)")
     plt.xlabel("Experiment duration (hour)")
     plt.grid()
+    plt.legend()
     plt.show()
-    for request_bar in request_df_bar_list:
+    case = ["Before rejuvenation", "After 1st rejuvenation", "After 2nd rejuvenation", "After 3rd rejuvenation"]
+    for (i, request_bar) in enumerate(request_df_bar_list):
         plt.bar(request_bar['hour'], request_bar['failed_runs'])
     plt.ylabel("Failed workloads")
     plt.xlabel("Experiment duration (hour)")
@@ -528,35 +533,17 @@ def get_error_times(struct, concurrency):
     return error_time_list
 
 
-def plot_metrics(struct, conc, metric, iteration = 1, window = 20, node_to_plot = None):
-    metrics = extract_metrics(struct, conc)
+def get_experiment_metric(struct, conc, iteration = 1, window = 20):
+    metrics = extract_metrics(struct, conc, iteration)
     metric_dfs = {}
     for run in metrics:
         for node, metrics in run.items():
-            if node_to_plot:
-                if node not in node_to_plot:
-                    continue
             if node in metric_dfs.keys():
                 temp = pd.concat([pd.DataFrame({"timestampt":[np.nan]}), pd.DataFrame(metrics)], ignore_index=True)
                 metric_dfs[node] = pd.concat([metric_dfs[node], temp], ignore_index=True)
             else:
                 metric_dfs[node] = pd.DataFrame(metrics)
-    metric_to_parse = metric
 
-
-    cleaning = False
-    if cleaning:
-        empty_index = list()
-        for i, s in enumerate(metric_dfs[0]["wally190"][metric_to_parse]):
-            if len(s) == 0:
-                empty_index.append(i)
-        print(f'For metric {metric} the following indexes are empty : {empty_index}')
-        for node, metrics in before.items():
-            for metric, values in metrics.items():
-                eliminated = 0
-                for index in empty_index:
-                    values.pop(index - eliminated)
-                    eliminated = eliminated + 1
     for node, df in metric_dfs.items():
         df['timestamp'] = df['timestamp'].astype('float')
 
@@ -565,42 +552,24 @@ def plot_metrics(struct, conc, metric, iteration = 1, window = 20, node_to_plot 
         metric_dfs[node] = metric_dfs[node].replace(r'^\s*$', np.nan, regex=True)
         metric_dfs[node]['hour'] = (df['timestamp'] - timestamp_start)/3600
         metric_dfs[node] = metric_dfs[node].astype('float')
+    return metric_dfs
 
-    for node, df in metric_dfs.items():
-        plt.plot(df['hour'], df[metric_to_parse], label=node)
-    plt.title(metric_to_parse)
+def plot_basic_memory_info(metrics):
+    control_df = m[list(m.keys())[0]]
+    plt.plot(control_df['hour'], control_df["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2, 30), label="RAM available")
+    plt.plot(control_df['hour'], control_df["node_memory_swap_used_bytes"]/pow(2, 30), label="Swap used")
+    plt.grid()
+    plt.xlabel("Experiment duration (hour)")
+    plt.ylabel("(GB)")
+    plt.legend()
     plt.show()
 
-    initial_performance = None
-    request_df_bar_list = {}
-    for node, df in metric_dfs.items():
-
-        bar_time = list()
-        bar_metric = list()
-        bar_successfull_runs = list()
-        bar_failed_runs = list()
-        chunk_amount = int(((df['timestamp'].max() - df['timestamp'].min()) / 3600).round())
-        for i in range(chunk_amount):
-            chunk_start = df['timestamp'].min() + (i * 3600)
-            chunk_end = df['timestamp'].min() + ((i+1) * 3600)
-            chunk = df[df['timestamp'].between(chunk_start, chunk_end)]
-            bar_time.append(chunk['timestamp'].mean())
-            value = chunk[metric_to_parse].mean()
-            if math.isnan(value):
-                value = 0
-            bar_metric.append(value)
-        bar_data = pd.DataFrame()
-        bar_data['timestamp'] = bar_time
-        bar_data['hour'] = (((bar_data['timestamp']-timestamp_start)/3600)-0.5).round() + 0.5
-        bar_data['value'] = bar_metric
-        if not initial_performance:
-            initial_performance = bar_metric[0]
-        bar_data['performance_change'] = (bar_data['value'] - initial_performance)/(initial_performance/100) + 100
-
-        request_df_bar_list[node] = bar_data
-
-    for node, bar_data in request_df_bar_list.items():
-        plt.stem(bar_data['hour'], bar_data['value'])
+def plot_metrics(x, y, label=None, xlabel=None, ylabel=None, title=None):
+    plt.plot(x, y, label=label)
+    plt.xlabel=xlabel
+    plt.ylabel=ylabel
+    plt.grid()
+    plt.title(title)
     plt.show()
     return
 
@@ -653,55 +622,261 @@ def analyze_all(window):
         print(f" start:mid:end:reset avg duration ")
         print(f" {info['starting_avg_dur']} : {info['middle_avg_dur']} : {info['ending_avg_dur']} : {info['reset_avg_dur']} ")
 
-def get_bar_change(full_data):
-    initial_value = full_data[0][0]
+def get_bar_change(full_data, initial_value=None):
+    if not initial_value:
+        initial_value = full_data[0][0]
     change = list()
     for data in full_data:
         change.append((data - initial_value) / (initial_value / 100) + 100)
     return change
 
 def plot_bars(s, metric):
-    for (rally_data, metric_data) in s:
-        for node in metric_data:
-            plt.bar(rally_data['hour'], metric_data[node][metric])
-    plt.show()
+    rally_dfs = list()
+    metric_dfs_controller = list()
+    metric_dfs = list()
     controller_node = list(s[0][1].keys())[0]
+    for (rally_data, metric_data) in s:
+        rally_dfs.append(rally_data)
+        if metric_data:
+            metric_dfs_controller.append(metric_data[controller_node])
+            metric_dfs.append(metric_data)
     duration_performance_change = get_bar_change(list(map(lambda data: data[0]['duration'], s)))
-    swap_amount_change = get_bar_change(list(map(lambda data: data[1][controller_node][metric], s)))
+    swap_amount_change = get_bar_change(list(map(lambda data: data[controller_node][metric], metric_dfs)))
+    corellation = pd.DataFrame({"dur_change": duration_performance_change[0], "swap_change": swap_amount_change[0]}).corr()
     for i in range(len(s)):
-        plt.bar(s[i][0]['hour'], swap_amount_change[i], label="_" * i + "Swap usage change")
-        plt.bar(s[i][0]['hour'], duration_performance_change[i], label= "_"*i + "WL duration change")
+        if i < len(swap_amount_change):
+            plt.stem(s[i][0]['hour'], swap_amount_change[i], label="_" * i + "Swap usage change")
+        if i < len(duration_performance_change):
+            plt.stem(s[i][0]['hour'], duration_performance_change[i], label= "_"*i + "WL duration change", markerfmt="red")
     plt.legend()
+    plt.title(f"Corellation = {corellation}")
     plt.show()
 
-#analyze_all(30)
-struct = all_in_one_fld
-conc = 8
-iterations = [2]
-window = 20
+    rally_df = pd.concat(rally_dfs, ignore_index=True)
+    metric_df = pd.concat(metric_dfs_controller, ignore_index=True)
+    duration_diff_pct = rally_df.pct_change()['duration']
+    swap_diff_pct = metric_df.pct_change()[metric]
+    corellation = pd.DataFrame({"dur_change": duration_diff_pct, "swap_change": swap_diff_pct}).corr()['swap_change']['dur_change']
+    plt.stem(rally_df['hour'][:len(duration_diff_pct)], duration_diff_pct, label="Swap usage change")
+    plt.stem(rally_df['hour'][:len(swap_diff_pct)], swap_diff_pct, label= "WL duration change", markerfmt="red")
+    plt.legend()
+    plt.title(f"Corellation = {corellation}")
+    plt.show()
 
-bars = True
-dur = False
-metr = True
+def error_to_human(error_list):
+    if len(error_list) == 0:
+        return None
+    if re.compile('Unable to establish connection to http://130.149.249').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to connect to another node"
+    if re.compile('http://130.149.249.*timed out').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to connect to another node"
+    if re.compile('Server.*ERROR status').search(error_list[2]):
+        return "NOVA: Instance has ERROR status"
+    if re.compile('Volume.*ERROR status').search(error_list[2]):
+        return "CINDER: Volume has ERROR status"
+    if re.compile('Quota exceeded.*security_group').search(error_list[2]):
+        return "NEUTRON: Quota exceeded for security_group"
+    if re.compile('Quota exceeded.*router').search(error_list[2]):
+        return "NEUTRON: Quota exceeded for Neutron.router"
+    if re.compile('Cannot.*detach.*while it is in task_state rebuild').search(error_list[2]):
+        return "NOVA: Cannot detach volume while rebuilding instance"
+    if re.compile('Cannot.*detach.*while it is in vm_state error').search(error_list[2]):
+        return "NOVA: Cannot detach volume while instance in error state"
+    if re.compile('Quota exceeded for instances').search(error_list[2]):
+        return "NOVA: Instance quota exceeded"
+    if re.compile('download.cirros-cloud.net.*Network is unreachable').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to download image, Network unreachable"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection refused').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to download image, Connection error"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection timed out').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to download image, Connection error"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*No route to host').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to download image, No route to host"
+    if re.compile('Invalid volume: Volume status must be').search(error_list[2]):
+        return "CONNECTION_ERROR: Unable to download image, No route to host"
+    if re.compile(' Maximum number of volumes allowed \(10\) exceeded for quota').search(error_list[2]):
+        return "CINDER: Volume limit exceeded"
+    print(error_list[2])
+    raise Exception(error_list)
 
-if bars:
-    for iteration in iterations:
-        s = get_experiment_data_bars(struct, conc, iteration=iteration, window=window)
-        plot_bars(s, 'node_memory_swap_used_bytes')
 
-if dur:
-    for iteration in iterations:
-        plot_durations(struct, conc, iteration=iteration, window=window)
+def get_error_info(task_data, concurrency):
+    task_data = pd.DataFrame(task_data[0], columns= ["timestamp", "duration", "error", "atomic_actions"])
+    error = task_data['error']
+    if len(error)>5145:
+        if error[5145]:
+            s = error_to_human(error[5145])
+    error = error.apply(lambda x: error_to_human(x))
+    error_info = {}
+    amount_of_errors_per_wl = error.apply(lambda x: x == None)
+    failed_workloads = error[~error.isnull()]
+    amount_of_errors = failed_workloads.index.size
+    success_workloads = error[error.isnull()]
+    amount_of_success = success_workloads.index.size
 
-#plot_durations_for_actions(struct, conc, window, ['nova.boot'])
+    last_success_index = success_workloads.index[-1]
 
-#metrics=['node_memory_available_bytes_node_memory_MemAvailable_bytes', 'node_memory_swap_used_bytes', 'node_cpu_utilisation_avg', 'available_space_/dev/mapper/vg0-root_ext4_/']
-metrics=['node_memory_swap_used_bytes']
+    failed = False
 
-if metr:
+    first_error = None
+    first_error_index = None
+    last_error_before_fail = None
+    last_error_before_fail_index = None
+    error_amount_before_fail = None
+    success_amount_before_fail = None
+    first_error_after_fail = None
+    first_error_after_fail_index = None
+    last_error_amount_before_fail = None
+
+    if amount_of_errors > 0:
+        if last_success_index + concurrency < len(error):
+            failed = True
+    errors_before_fail = None
+    errors_after_fail = None
+    if failed_workloads.size > 0:
+        first_error_index = failed_workloads.index[0]
+        first_error = failed_workloads[first_error_index]
+    if failed:
+        errors_before_fail_index = failed_workloads.index[failed_workloads.index <= success_workloads.index[-1]]
+        errors_before_fail = failed_workloads[errors_before_fail_index]
+        errors_after_fail_index = failed_workloads.index[failed_workloads.index >= success_workloads.index[-1]]
+        errors_after_fail = failed_workloads[errors_after_fail_index]
+
+        last_error_before_fail_index = errors_before_fail_index[-1]
+        last_error_before_fail = failed_workloads[last_error_before_fail_index]
+        last_error_amount_before_fail = errors_before_fail[errors_before_fail==last_error_before_fail].count()
+
+        error_amount_before_fail = errors_before_fail_index.size
+        success_amount_before_fail = success_workloads.size
+
+        first_error_after_fail_index = failed_workloads.index[failed_workloads.index > success_workloads.index[-1]][0]
+        first_error_after_fail = failed_workloads[first_error_after_fail_index]
+
+    error_info.update({'first_error':first_error, 'first_error_index':first_error_index })
+    error_info.update({'last_error_before_fail':last_error_before_fail, "last_error_before_fail_index":last_error_before_fail_index})
+    error_info.update({'last_error_amount_before_fail': last_error_amount_before_fail})
+    error_info.update({"error_amount_before_fail":error_amount_before_fail })
+    error_info.update({"success_amount_before_fail":success_amount_before_fail})
+    error_info.update({"first_error_after_fail":first_error_after_fail, "first_error_after_fail_index":first_error_after_fail_index})
+
+    unique_errors = error.dropna().unique()
+    error_stat = pd.DataFrame()
+    for unique_error in unique_errors:
+        before_occ = None
+        before_occ_perc = None
+        after_occ = None
+        after_occ_perc = None
+        total_occ = error[error == unique_error].count()
+        total_occ_perc = (total_occ/error.count()) * 100
+        if failed:
+            before_occ = errors_before_fail[errors_before_fail==unique_error].count()
+            before_occ_perc = (before_occ/errors_before_fail.count())*100
+            after_occ = errors_after_fail[errors_after_fail==unique_error].count()
+            after_occ_perc = (after_occ/errors_after_fail.count())*100
+        curr_stat = {"Total occurence":total_occ, "Total occurence perc.":total_occ_perc,
+                     "Before failed occurence": before_occ, "Before failed occurence perc.": before_occ_perc,
+                     "After failed occurence": after_occ, "After failed occurence perc.": after_occ_perc}
+        error_stat[unique_error] = curr_stat
+
+    return error_info, error_stat
+
+def print_error_stat():
+    concurrency_list = [1,2,4,8,16,64]
+    AiO_iteration_to_use=[1,4,1,4,2,1]
+    HA_error_data = pd.DataFrame()
+    AiO_error_data = pd.DataFrame()
+    HA_error_stats = list()
+    AiO_error_stats = list()
+    cached = False
+    if cached:
+        HA_error_data = pd.read_csv("tmp/HA_error.csv", index_col=0)
+        AiO_error_data = pd.read_csv("tmp/AiO_error.csv", index_col=0)
+        for i in range(6):
+            HA_error_stats.append(pd.read_csv(f"tmp/HA_stat{i}.csv", index_col=0))
+            AiO_error_stats.append(pd.read_csv(f"tmp/AiO_stat{i}.csv", index_col=0))
+    else:
+        for scenario_counter in range(6):
+            conc = concurrency_list[scenario_counter]
+            HA_data = extract_rally_output(high_avail_fld, conc)
+            AiO_data = extract_rally_output(all_in_one_fld, conc, AiO_iteration_to_use[scenario_counter])
+            error_data, error_stats = get_error_info(HA_data, conc)
+            HA_error_data = pd.concat([HA_error_data, pd.DataFrame([error_data])], ignore_index=True)
+            HA_error_stats.append(error_stats)
+            error_data, error_stats = get_error_info(AiO_data, conc)
+            AiO_error_data = pd.concat([AiO_error_data, pd.DataFrame([error_data])], ignore_index=True)
+            AiO_error_stats.append(error_stats)
+        if not os.path.exists("tmp"):
+            os.mkdir("tmp")
+        HA_error_data.to_csv("tmp/HA_error.csv")
+        AiO_error_data.to_csv("tmp/AiO_error.csv")
+        for index in range(6):
+            HA_error_stats[index].to_csv(f"tmp/HA_stat{index}.csv")
+            AiO_error_stats[index].to_csv(f"tmp/AiO_stat{index}.csv")
+    print("High availability data")
+    print(HA_error_data.to_markdown())
+    print("All-in-one data")
+    print(AiO_error_data.to_markdown())
+    config_list = ["Mult", "AiO"]
+    concurrencies=[1,2,4,8,16,64]
+    for config, data in enumerate([HA_error_stats, AiO_error_stats]):
+        for index, stat in enumerate(data):
+            if stat.empty:
+                continue
+            stat_t = stat.T
+            before_dominance = stat_t[stat_t['Before failed occurence perc.'] > 50]
+            if before_dominance.size > 0:
+                stat_without_dom = stat_t
+                stat_without_dom = stat_without_dom.drop(before_dominance.index)
+                stat_without_dom = stat_without_dom[stat_without_dom['Before failed occurence'] != 0]
+                values = stat_without_dom["Before failed occurence"]
+                fig, ax = plt.subplots()
+                pie = plt.pie(x=stat_without_dom["Before failed occurence"], shadow=True)
+                total_errors = int(stat_without_dom["Before failed occurence"].sum())
+                text = ax.text(1.3, 1.4, f"Excluded: {before_dominance.index[0]}: {round(before_dominance['Before failed occurence perc.'][0],2)}%"
+                                       f"\nOther occurred errors: {total_errors}, among them:",  fontsize=14,
+                        verticalalignment="top")
+                leg = plt.legend(pie[0], map(lambda a,b: f"{a}\n{int(b)} occurrence{'s' if int(b)>1 else ''}" ,
+                                             stat_without_dom.index, stat_without_dom["Before failed occurence"]),
+                           bbox_to_anchor=(0.4, 0.8), loc="upper left", fontsize=14,
+                           bbox_transform=plt.gcf().transFigure)
+                plt.subplots_adjust(left=0.0, bottom=0.1, right=0.5)
+                fig = plt.gcf()
+                fig.savefig(f'fig/{config_list[config]}_{concurrencies[index]}_pie_failures.pdf')
+                plt.show()
+
+if __name__ == "__main__":
+    struct =  high_avail_fld
+    conc = 16
+    iterations = [1]
+    window = 20
+
+    bars = True
+    dur = True
+    metr = True
+
+    plt.rcParams['font.size'] = 16
+    plt.rcParams['figure.figsize'][0] = 12
+
+    print_error_stat()
+    exit()
+
+    if bars:
+        for iteration in iterations:
+            s = get_experiment_data_bars(struct, conc, iteration=iteration, window=window)
+            plot_bars(s, 'node_memory_swap_used_bytes')
+
+    if dur:
+        for iteration in iterations:
+            plot_durations(struct, conc, iteration=iteration, window=window)
+
+    # plot_durations_for_actions(struct, conc, window, ['nova.boot'])
+    # metrics=['node_memory_available_bytes_node_memory_MemAvailable_bytes', 'node_memory_swap_used_bytes', 'node_cpu_utilisation_avg', 'available_space_/dev/mapper/vg0-root_ext4_/']
     print_metric_names(struct, conc)
-    metric = get_metric_list(struct, conc)[0]
-    for iteration in iterations:
-        for metric in metrics:
-            plot_metrics(struct, conc, metric, iteration=iteration, window = window, node_to_plot="wally194")
+    metrics = ['node_memory_swap_used_bytes']
+
+    if metr:
+        for iteration in iterations:
+            m = get_experiment_metric(struct, conc, iteration=iteration, window=window)
+            plot_basic_memory_info(m)
+
 

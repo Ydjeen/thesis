@@ -37,6 +37,7 @@ def ensure_exp_folder(structure, concurrency):
         if os.path.isfile(folder_needed+".zip"):
             unzip_folder(folder_needed+".zip", data_folder + structure + "/")
     if not os.path.isdir(folder_needed):
+        print("no folder", folder_needed)
         return False
     return True
 
@@ -171,7 +172,7 @@ def metrics_data_to_df(metrics_data):
                 metric_dfs[node] = pd.DataFrame(metrics)
 
 
-def get_experiment_data_bars(struct, conc, iteration, window):
+def get_experiment_data_bars(struct, conc, iteration, window=1, chunk_size = 3600):
     rally_data_all = extract_rally_output(struct, conc, iteration)
     rally_data_all = list(map(lambda execution: pd.DataFrame(execution), rally_data_all))
     for data in rally_data_all:
@@ -211,7 +212,7 @@ def get_experiment_data_bars(struct, conc, iteration, window):
                 df['timestamp'] = df['timestamp'] - timestamp_start
 
         bar_rally_data = {}
-        total_chunks = int(round(((timestamp_range[1] - timestamp_range[0])/3600)))
+        total_chunks = int(round(((timestamp_range[1] - timestamp_range[0])/chunk_size)))
 
         bar_metric_data = {}
         if metric_data:
@@ -221,10 +222,17 @@ def get_experiment_data_bars(struct, conc, iteration, window):
         bar_duration = list()
         bar_successfull_runs = list()
         bar_failed_runs = list()
+        start_indexes = list()
+        end_indexes = list()
+        chunk_correction = 0.5
+        if chunk_size == 300:
+            chunk_correction = 2.5
         for i in range(total_chunks):
-            chunk_start = rally_data['timestamp'].min() + (i * 3600)
-            chunk_end = rally_data['timestamp'].min() + ((i+1) * 3600)
+            chunk_start = rally_data['timestamp'].min() + (i * chunk_size)
+            chunk_end = rally_data['timestamp'].min() + ((i+1) * chunk_size)
             chunk = rally_data[rally_data['timestamp'].between(chunk_start, chunk_end)]
+            start_indexes.append(chunk.index[0])
+            end_indexes.append(chunk.index[-1])
             bar_time.append(chunk['timestamp'].mean())
             errors = chunk.apply(lambda x: True if x['error'] else False, axis=1)
             success = ~errors
@@ -238,12 +246,12 @@ def get_experiment_data_bars(struct, conc, iteration, window):
             if metric_data:
                 for node in bar_metric_data:
                     chunk_avg = metric_data[node][metric_data[node]['timestamp'].between(chunk_start, chunk_end)].mean()
-                    chunk_avg['hour'] = (((chunk_avg['timestamp']) / 3600) - 0.5).round() + 0.5
+                    chunk_avg['hour'] = (((chunk_avg['timestamp']) / chunk_size) - chunk_correction).round() + chunk_correction
                     bar_metric_data[node] = pd.concat((bar_metric_data[node], pd.DataFrame(chunk_avg).T), ignore_index=True)
 
         bar_rally_data = pd.DataFrame()
         bar_rally_data['timestamp'] = bar_time
-        bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / 3600) - 0.5).round() + 0.5
+        bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / chunk_size) - chunk_correction).round() + chunk_correction
         bar_rally_data['duration'] = bar_duration
         bar_rally_data['successful_runs'] = bar_successfull_runs
         bar_rally_data['failed_runs'] = bar_failed_runs
@@ -251,6 +259,8 @@ def get_experiment_data_bars(struct, conc, iteration, window):
             initial_performance = bar_duration[0]
         bar_rally_data['performance_change'] = (bar_rally_data['duration'] - initial_performance) / (
                 initial_performance / 100) + 100
+        bar_rally_data['start_index'] = start_indexes
+        bar_rally_data['end_index'] = end_indexes
         all_runs.append((bar_rally_data, bar_metric_data))
     return all_runs
 
@@ -666,36 +676,74 @@ def plot_bars(s, metric):
 def error_to_human(error_list):
     if len(error_list) == 0:
         return None
-    if re.compile('Unable to establish connection to http://130.149.249').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to connect to another node"
-    if re.compile('http://130.149.249.*timed out').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to connect to another node"
-    if re.compile('Server.*ERROR status').search(error_list[2]):
-        return "NOVA: Instance has ERROR status"
-    if re.compile('Volume.*ERROR status').search(error_list[2]):
-        return "CINDER: Volume has ERROR status"
-    if re.compile('Quota exceeded.*security_group').search(error_list[2]):
-        return "NEUTRON: Quota exceeded for security_group"
-    if re.compile('Quota exceeded.*router').search(error_list[2]):
-        return "NEUTRON: Quota exceeded for Neutron.router"
-    if re.compile('Cannot.*detach.*while it is in task_state rebuild').search(error_list[2]):
-        return "NOVA: Cannot detach volume while rebuilding instance"
-    if re.compile('Cannot.*detach.*while it is in vm_state error').search(error_list[2]):
-        return "NOVA: Cannot detach volume while instance in error state"
     if re.compile('Quota exceeded for instances').search(error_list[2]):
-        return "NOVA: Instance quota exceeded"
-    if re.compile('download.cirros-cloud.net.*Network is unreachable').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to download image, Network unreachable"
-    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection refused').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to download image, Connection error"
-    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection timed out').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to download image, Connection error"
-    if re.compile('cirros-0.3.5-x86_64-disk.img.*No route to host').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to download image, No route to host"
-    if re.compile('Invalid volume: Volume status must be').search(error_list[2]):
-        return "CONNECTION_ERROR: Unable to download image, No route to host"
+        return "NOVA: Quota exceeded for instance"
+    if re.compile('executer._rebuild_server').search(error_list[2]):
+        return "NOVA: Rebuild server error"
+    if re.compile('Quota exceeded.*router').search(error_list[2]):
+        return "NEUTRON: Quota exceeded for router"
+    if re.compile('Quota exceeded.*security_group').search(error_list[2]):
+        return "NEUTRON: Quota exceeded for security group"
     if re.compile(' Maximum number of volumes allowed \(10\) exceeded for quota').search(error_list[2]):
-        return "CINDER: Volume limit exceeded"
+        return "CINDER: Quota exceeded for volume"
+    if re.compile('Unable to establish connection to http://130.149.249').search(error_list[2]):
+        if "admin_keystone.create_user()" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable create user"
+        if "add_role(user_id=self.executer.user.id" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable add role"
+        if "_create_security_group" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable security group"
+        if "revoke_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable revoke role"
+        if "delete_user" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable delete user"
+        if "delete_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable delete_role"
+        if "detach_volume" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable detach_volume"
+        if "create_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable create_role"
+        if "attach_volume" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable attach_volume"
+        return "CONNECTION_ERROR: Another node is unreachable create_user"
+    if re.compile('http://130.149.249.*timed out').search(error_list[2]):
+        if "admin_keystone.create_user()" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable create user"
+        if "add_role(user_id=self.executer.user.id" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable add role"
+        if "_create_security_group" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable security group"
+        if "revoke_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable revoke role"
+        if "delete_user" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable delete user"
+        if "delete_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable delete_role"
+        if "detach_volume" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable detach_volume"
+        if "create_role" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable create_role"
+        if "attach_volume" in error_list[2]:
+            return "CONNECTION_ERROR: Another node is unreachable attach_volume"
+        return "CONNECTION_ERROR: Another node is unreachable"
+    if re.compile('self.executer.create_volume_params').search(error_list[2]):
+        return "CINDER: Create volume"
+    if re.compile('Invalid volume: Volume status must be').search(error_list[2]):
+        return "CINDER: Invalid volume"
+    if re.compile('Cannot.*detach.*while it is in task_state rebuild').search(error_list[2]):
+        return "NOVA: Detach volume"
+    if re.compile('Cannot.*detach.*while it is in vm_state error').search(error_list[2]):
+        return "NOVA: Detach volume"
+    if re.compile('self.executer.server_kwargs').search(error_list[2]):
+        return "NOVA: Create server"
+    if re.compile('download.cirros-cloud.net.*Network is unreachable').search(error_list[2]):
+        return "NETWORK_ERROR: Unable to download image"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection refused').search(error_list[2]):
+        return "NETWORK_ERROR: Unable to download image"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*Connection timed out').search(error_list[2]):
+        return "NETWORK_ERROR: Unable to download image"
+    if re.compile('cirros-0.3.5-x86_64-disk.img.*No route to host').search(error_list[2]):
+        return "NETWORK_ERROR: Unable to download image"
     print(error_list[2])
     raise Exception(error_list)
 
@@ -703,18 +751,16 @@ def error_to_human(error_list):
 def get_error_info(task_data, concurrency):
     task_data = pd.DataFrame(task_data[0], columns= ["timestamp", "duration", "error", "atomic_actions"])
     error = task_data['error']
-    if len(error)>5145:
-        if error[5145]:
-            s = error_to_human(error[5145])
-    error = error.apply(lambda x: error_to_human(x))
+    error_old = error
+    error_formated = error.apply(lambda x: error_to_human(x))
     error_info = {}
-    amount_of_errors_per_wl = error.apply(lambda x: x == None)
-    failed_workloads = error[~error.isnull()]
+    amount_of_errors_per_wl = error_formated.apply(lambda x: x == None)
+    failed_workloads = error_formated[~error_formated.isnull()]
     amount_of_errors = failed_workloads.index.size
-    success_workloads = error[error.isnull()]
+    success_workloads = error_formated[error_formated.isnull()]
     amount_of_success = success_workloads.index.size
-
     last_success_index = success_workloads.index[-1]
+    fail_point = last_success_index
 
     failed = False
 
@@ -729,7 +775,7 @@ def get_error_info(task_data, concurrency):
     last_error_amount_before_fail = None
 
     if amount_of_errors > 0:
-        if last_success_index + concurrency < len(error):
+        if last_success_index+concurrency <= failed_workloads.index[-1]:
             failed = True
     errors_before_fail = None
     errors_after_fail = None
@@ -737,9 +783,9 @@ def get_error_info(task_data, concurrency):
         first_error_index = failed_workloads.index[0]
         first_error = failed_workloads[first_error_index]
     if failed:
-        errors_before_fail_index = failed_workloads.index[failed_workloads.index <= success_workloads.index[-1]]
+        errors_before_fail_index = failed_workloads.index[failed_workloads.index <= fail_point]
         errors_before_fail = failed_workloads[errors_before_fail_index]
-        errors_after_fail_index = failed_workloads.index[failed_workloads.index >= success_workloads.index[-1]]
+        errors_after_fail_index = failed_workloads.index[failed_workloads.index >= fail_point]
         errors_after_fail = failed_workloads[errors_after_fail_index]
 
         last_error_before_fail_index = errors_before_fail_index[-1]
@@ -749,7 +795,7 @@ def get_error_info(task_data, concurrency):
         error_amount_before_fail = errors_before_fail_index.size
         success_amount_before_fail = success_workloads.size
 
-        first_error_after_fail_index = failed_workloads.index[failed_workloads.index > success_workloads.index[-1]][0]
+        first_error_after_fail_index = failed_workloads.index[failed_workloads.index > fail_point][0]
         first_error_after_fail = failed_workloads[first_error_after_fail_index]
 
     error_info.update({'first_error':first_error, 'first_error_index':first_error_index })
@@ -759,15 +805,16 @@ def get_error_info(task_data, concurrency):
     error_info.update({"success_amount_before_fail":success_amount_before_fail})
     error_info.update({"first_error_after_fail":first_error_after_fail, "first_error_after_fail_index":first_error_after_fail_index})
 
-    unique_errors = error.dropna().unique()
+    unique_errors = error_formated.dropna().unique()
     error_stat = pd.DataFrame()
+    error_data = list()
     for unique_error in unique_errors:
         before_occ = None
         before_occ_perc = None
         after_occ = None
         after_occ_perc = None
-        total_occ = error[error == unique_error].count()
-        total_occ_perc = (total_occ/error.count()) * 100
+        total_occ = error_formated[error_formated == unique_error].count()
+        total_occ_perc = (total_occ/error_formated.count()) * 100
         if failed:
             before_occ = errors_before_fail[errors_before_fail==unique_error].count()
             before_occ_perc = (before_occ/errors_before_fail.count())*100
@@ -777,20 +824,62 @@ def get_error_info(task_data, concurrency):
                      "Before failed occurence": before_occ, "Before failed occurence perc.": before_occ_perc,
                      "After failed occurence": after_occ, "After failed occurence perc.": after_occ_perc}
         error_stat[unique_error] = curr_stat
+    if failed:
+        error_data = [errors_before_fail, errors_after_fail]
+    else:
+        error_data = [failed_workloads]
+    return error_info, error_stat, error_data
 
-    return error_info, error_stat
+
+def plot_error_data(HA_error_data, AiO_error_data):
+    concurrency_list = [1, 2, 4, 8, 16, 64]
+    AiO_iteration_to_use = [1, 4, 1, 4, 2, 1]
+
+    exp6_bars = get_experiment_data_bars(high_avail_fld, 64, 1, 20)
+    exp6_errors = HA_error_data[5]
+
+    error = pd.concat([exp6_errors[0], exp6_errors[1]])
+    unique_errors = error.dropna().unique()
+    c = list()
+    for er in unique_errors:
+        if "uota exceeded" not in er:
+            c.append(er)
+    unique_errors = c
+
+    bar_error = {}
+
+    for unique_error in unique_errors:
+        bar_error[unique_error] = list()
+
+    for bar_index in exp6_bars[0][0].index:
+        start_index = exp6_bars[0][0]['start_index'][bar_index]
+        end_index = exp6_bars[0][0]['end_index'][bar_index]
+        errors_in_bar = error.iloc[(error.index>=start_index) & (error.index<= end_index)]
+        for unique_error in unique_errors:
+            bar_error[unique_error].append(int(errors_in_bar[errors_in_bar==unique_error].count()))
+
+    for unique_error in unique_errors:
+        if sum(bar_error[unique_error]) == 0:
+            continue
+        plt.bar(exp6_bars[0][0]['hour'], bar_error[unique_error], label=unique_error)
+        break
+    plt.legend()
+    plt.show()
+
 
 def print_error_stat():
     concurrency_list = [1,2,4,8,16,64]
     AiO_iteration_to_use=[1,4,1,4,2,1]
-    HA_error_data = pd.DataFrame()
-    AiO_error_data = pd.DataFrame()
+    HA_error_info = pd.DataFrame()
+    AiO_error_info = pd.DataFrame()
     HA_error_stats = list()
     AiO_error_stats = list()
+    HA_error_data = list()
+    AiO_error_data = list()
     cached = False
     if cached:
-        HA_error_data = pd.read_csv("tmp/HA_error.csv", index_col=0)
-        AiO_error_data = pd.read_csv("tmp/AiO_error.csv", index_col=0)
+        HA_error_info = pd.read_csv("tmp/HA_error.csv", index_col=0)
+        AiO_error_info = pd.read_csv("tmp/AiO_error.csv", index_col=0)
         for i in range(6):
             HA_error_stats.append(pd.read_csv(f"tmp/HA_stat{i}.csv", index_col=0))
             AiO_error_stats.append(pd.read_csv(f"tmp/AiO_stat{i}.csv", index_col=0))
@@ -799,25 +888,40 @@ def print_error_stat():
             conc = concurrency_list[scenario_counter]
             HA_data = extract_rally_output(high_avail_fld, conc)
             AiO_data = extract_rally_output(all_in_one_fld, conc, AiO_iteration_to_use[scenario_counter])
-            error_data, error_stats = get_error_info(HA_data, conc)
-            HA_error_data = pd.concat([HA_error_data, pd.DataFrame([error_data])], ignore_index=True)
+            error_info, error_stats, error_data = get_error_info(HA_data, conc)
+            HA_error_info = pd.concat([HA_error_info, pd.DataFrame([error_info])], ignore_index=True)
             HA_error_stats.append(error_stats)
-            error_data, error_stats = get_error_info(AiO_data, conc)
-            AiO_error_data = pd.concat([AiO_error_data, pd.DataFrame([error_data])], ignore_index=True)
+            HA_error_data.append(error_data)
+            error_info, error_stats, error_data = get_error_info(AiO_data, conc)
+            AiO_error_info = pd.concat([AiO_error_info, pd.DataFrame([error_info])], ignore_index=True)
             AiO_error_stats.append(error_stats)
+            AiO_error_data.append(error_data)
+
         if not os.path.exists("tmp"):
             os.mkdir("tmp")
-        HA_error_data.to_csv("tmp/HA_error.csv")
-        AiO_error_data.to_csv("tmp/AiO_error.csv")
+        HA_error_info.to_csv("tmp/HA_error.csv")
+        AiO_error_info.to_csv("tmp/AiO_error.csv")
         for index in range(6):
             HA_error_stats[index].to_csv(f"tmp/HA_stat{index}.csv")
             AiO_error_stats[index].to_csv(f"tmp/AiO_stat{index}.csv")
     print("High availability data")
-    print(HA_error_data.to_markdown())
+    print(HA_error_info.to_markdown())
     print("All-in-one data")
-    print(AiO_error_data.to_markdown())
+    print(AiO_error_info.to_markdown())
     config_list = ["Mult", "AiO"]
     concurrencies=[1,2,4,8,16,64]
+    total_data = pd.DataFrame()
+    for i, data in enumerate(HA_error_stats):
+        if i > 2:
+            total_data = total_data.add(data, fill_value=0)
+    for i, data in enumerate(AiO_error_stats):
+        if i > 2:
+            total_data = total_data.add(data, fill_value=0)
+    print(total_data.to_markdown())
+
+    plot_error_data(HA_error_data, AiO_error_data)
+
+
     for config, data in enumerate([HA_error_stats, AiO_error_stats]):
         for index, stat in enumerate(data):
             if stat.empty:
@@ -844,6 +948,73 @@ def print_error_stat():
                 fig.savefig(f'fig/{config_list[config]}_{concurrencies[index]}_pie_failures.pdf')
                 plt.show()
 
+    for config, data in enumerate([HA_error_stats, AiO_error_stats]):
+        for index, stat in enumerate(data):
+            if stat.empty:
+                continue
+            stat_t = stat.T
+            before_dominance = stat_t[stat_t['After failed occurence perc.'] > 50]
+            if before_dominance.size > 0:
+                stat_without_dom = stat_t
+                stat_without_dom = stat_without_dom.drop(before_dominance.index)
+                stat_without_dom = stat_without_dom[stat_without_dom['After failed occurence'] != 0]
+                values = stat_without_dom["After failed occurence"]
+                fig, ax = plt.subplots()
+                pie = plt.pie(x=stat_without_dom["After failed occurence"], shadow=True)
+                total_errors = int(stat_without_dom["After failed occurence"].sum())
+                text = ax.text(1.3, 1.4, f"Excluded: {before_dominance.index[0]}: {round(before_dominance['After failed occurence perc.'][0],2)}%"
+                                       f"\nOther occurred errors: {total_errors}, among them:",  fontsize=14,
+                        verticalalignment="top")
+                leg = plt.legend(pie[0], map(lambda a,b: f"{a}\n{int(b)} occurrence{'s' if int(b)>1 else ''}" ,
+                                             stat_without_dom.index, stat_without_dom["After failed occurence"]),
+                           bbox_to_anchor=(0.4, 0.8), loc="upper left", fontsize=14,
+                           bbox_transform=plt.gcf().transFigure)
+                plt.subplots_adjust(left=0.0, bottom=0.1, right=0.5)
+                fig = plt.gcf()
+                #fig.savefig(f'fig/{config_list[config]}_{concurrencies[index]}_pie_failures.pdf')
+                plt.show()
+
+
+def mann_kendall_test(param):
+    sum = 0
+    for k in range(param.size-1):
+        for l in range(k+1, param.size):
+            diff = param[l] - param[k]
+            if diff < 0:
+                diff = -1
+            if diff > 0:
+                diff = 1
+            sum = sum + diff
+    slope_all = list()
+    for i in range(param.size-1):
+        for j in range(i+1, param.size):
+            diff = (param[j] - param[i])/(j-i)
+            slope_all.append(diff)
+    slope_all.sort()
+    return slope_all[int(len(slope_all)/2)]
+
+def get_duration_bar(bars):
+    return bars[0][0]['duration']
+
+def mann_kendall_test_all():
+    concurrency_list = [1, 2, 4, 8, 16, 64]
+    AiO_iteration_to_use = [1, 4, 1, 4, 2, 1]
+    HA_iteration_to_use = [1,1,1,1,1,1]
+
+
+    print("All in One data")
+    for i in range (3):
+        bars = get_experiment_data_bars(all_in_one_fld, concurrency_list[i], AiO_iteration_to_use[i])
+        duration_bar = bars[0][0]['duration']
+        print(mann_kendall_test(bars[0][0]['duration']))
+
+    print("Multinode data")
+    for i in range (3):
+        bars = get_experiment_data_bars(high_avail_fld, concurrency_list[i], HA_iteration_to_use[i])
+        duration_bar = bars[0][0]['duration']
+        print(mann_kendall_test(bars[0][0]['duration']))
+
+
 if __name__ == "__main__":
     struct =  high_avail_fld
     conc = 16
@@ -857,6 +1028,12 @@ if __name__ == "__main__":
     plt.rcParams['font.size'] = 16
     plt.rcParams['figure.figsize'][0] = 12
 
+    mann_kendall_test_all()
+    exit()
+
+    HA_data = extract_rally_output(all_in_one_fld, 2)
+    temp = get_error_info(HA_data, 64)
+    print(temp)
     print_error_stat()
     exit()
 

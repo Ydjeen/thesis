@@ -389,10 +389,10 @@ def plot_HA_conc64():
 
     second_part = control_df16['hour'][control_df16['hour']>25.5]
     control_df16['hour'][control_df16['hour']>25.5] = second_part - (second_part.min() - 26.5)
-    skip = control_df16.iloc[1555]
+    skip = control_df16.loc[1555]
     control_df16 = control_df16[control_df16['hour']<28]
     control_df16.loc[1555] = skip
-
+    control_df16 = control_df16.sort_index()
     second_part = control_df64['hour'][control_df64['hour']>25.5]
     control_df64['hour'][control_df64['hour']>25.5] = second_part - (second_part.min() - 26.5)
     #control_df64 = control_df64[control_df64['hour']<27.5]
@@ -400,20 +400,22 @@ def plot_HA_conc64():
     plt.figure().set_figwidth(12)
 
     plt.plot(control_df16['hour'], control_df16["node_memory_available_bytes_node_memory_MemAvailable_bytes"] / pow(2, 30),
-             ls = "--" ,label="Scenario#5, RAM available")
-    plt.plot(control_df16['hour'], control_df16["node_memory_swap_used_bytes"] / pow(2, 30), ls= '--', label="Scenario#5, Swap used")
+             ls = "--", marker="x", markevery=20, label="Scenario#5, RAM available", color="C0")
+    plt.plot(control_df16['hour'], control_df16["node_memory_swap_used_bytes"] / pow(2, 30),
+             ls= '--', marker="x", markevery=20, label="Scenario#5, Swap used", color="C2")
 
     plt.axvline(x=1, color='r', ls = '--', label='Scenario#5, OpenStack fails')
 
     plt.plot(control_df64['hour'], control_df64["node_memory_available_bytes_node_memory_MemAvailable_bytes"] / pow(2, 30),
-             label="Scenario#6, RAM available")
-    plt.plot(control_df64['hour'], control_df64["node_memory_swap_used_bytes"] / pow(2, 30), label="Scenario#6, Swap used")
+             label="Scenario#6, RAM available", color="C1")
+    plt.plot(control_df64['hour'], control_df64["node_memory_swap_used_bytes"] / pow(2, 30), label="Scenario#6, Swap used", color="C6")
     plt.axvline(x=14, color='r', label='Scenario#6, OpenStack fails')
 
     plt.grid()
     plt.xlabel("Experiment duration (hour)")
     plt.ylabel("Memory (GB)")
     plt.legend()
+    plt.tight_layout()
     fig = plt.gcf()
     fig.savefig('fig/HA_16_64_memory.pdf')
     plt.show()
@@ -423,4 +425,4 @@ if not os.path.exists("fig"):
 plt.rcParams['font.size'] = 16
 plt.rcParams['axes.grid'] = True
 plt.rcParams['figure.figsize'][0] = 12
-plot_HA_conc64()
+plot_HA_conc16()

@@ -225,6 +225,7 @@ def get_experiment_data_bars(struct, conc, iteration, window=1, chunk_size = 360
         start_indexes = list()
         end_indexes = list()
         chunk_correction = 0.5
+        chunk_time_shift = 1
         if chunk_size == 300:
             chunk_correction = 2.5
         for i in range(total_chunks):
@@ -246,12 +247,12 @@ def get_experiment_data_bars(struct, conc, iteration, window=1, chunk_size = 360
             if metric_data:
                 for node in bar_metric_data:
                     chunk_avg = metric_data[node][metric_data[node]['timestamp'].between(chunk_start, chunk_end)].mean()
-                    chunk_avg['hour'] = (((chunk_avg['timestamp']) / chunk_size) - chunk_correction).round() + chunk_correction
+                    chunk_avg['hour'] = (((chunk_avg['timestamp']) / chunk_size) - chunk_correction).round() + chunk_time_shift
                     bar_metric_data[node] = pd.concat((bar_metric_data[node], pd.DataFrame(chunk_avg).T), ignore_index=True)
 
         bar_rally_data = pd.DataFrame()
         bar_rally_data['timestamp'] = bar_time
-        bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / chunk_size) - chunk_correction).round() + chunk_correction
+        bar_rally_data['hour'] = (((bar_rally_data['timestamp']) / chunk_size) - chunk_correction).round() + chunk_time_shift
         bar_rally_data['duration'] = bar_duration
         bar_rally_data['successful_runs'] = bar_successfull_runs
         bar_rally_data['failed_runs'] = bar_failed_runs
@@ -975,8 +976,10 @@ def print_error_stat():
                 plt.show()
 
 
-def mann_kendall_test(param):
-    sum = 0
+def mann_kendall_test(data):
+    mk_value = 0
+    param = data[:].reset_index(drop=True)
+    mean = 0
     for k in range(param.size-1):
         for l in range(k+1, param.size):
             diff = param[l] - param[k]
@@ -984,14 +987,31 @@ def mann_kendall_test(param):
                 diff = -1
             if diff > 0:
                 diff = 1
-            sum = sum + diff
+            mean = mean + diff
+    ties = sum([(x.size)*((x.size)-1)*(2*(x.size)+5) for x in param.unique() if x.size>1])
+    var = 1/18 * (param.size*(param.size - 1)*(2*param.size + 5) - ties)
+    if mean == 0:
+        mk_value = 0
+    if mean > 0:
+        mk_value = (mean-1)/math.sqrt(var)
+    if mean < 0:
+        mk_value = (mean+1)/math.sqrt(var)
     slope_all = list()
     for i in range(param.size-1):
         for j in range(i+1, param.size):
             diff = (param[j] - param[i])/(j-i)
             slope_all.append(diff)
     slope_all.sort()
-    return slope_all[int(len(slope_all)/2)]
+    slope = 0
+    try:
+        slope = slope_all[int(len(slope_all) / 2)]
+    except:
+        slope = 0
+    return mk_value, slope
+
+def aging_rejuv(data, rejuv_data):
+    param = data[:].reset_index(drop=True)
+    return param.get(param.size-1) - param[0], param.get(param.size-1) - rejuv_data[0]
 
 def get_duration_bar(bars):
     return bars[0][0]['duration']
@@ -1003,16 +1023,90 @@ def mann_kendall_test_all():
 
 
     print("All in One data")
-    for i in range (3):
+    print("RRT Mandall | Slope || Swap Mandall | Slope || Available Mandall | Slope")
+    for i in range (6):
         bars = get_experiment_data_bars(all_in_one_fld, concurrency_list[i], AiO_iteration_to_use[i])
         duration_bar = bars[0][0]['duration']
-        print(mann_kendall_test(bars[0][0]['duration']))
+        duration_bar = duration_bar[duration_bar > 0]
+
+        swap_used_bar = next(iter(bars[0][1].values()))['node_memory_swap_used_bytes']/pow(2, 30)
+        swap_used_bar = swap_used_bar[swap_used_bar > 0]
+
+        memory_avail_bar = next(iter(bars[0][1].values()))['node_memory_available_bytes_node_memory_MemAvailable_bytes']/pow(2, 30)
+        memory_avail_bar = memory_avail_bar[memory_avail_bar > 0]
+        values = [i for sub in [mann_kendall_test(duration_bar), mann_kendall_test(swap_used_bar), mann_kendall_test(memory_avail_bar)] for i in sub]
+        print(["{0:0.3f}".format(i*24) for i in values], f'Scen. {i+7}')
 
     print("Multinode data")
-    for i in range (3):
+    for i in range (6):
         bars = get_experiment_data_bars(high_avail_fld, concurrency_list[i], HA_iteration_to_use[i])
         duration_bar = bars[0][0]['duration']
-        print(mann_kendall_test(bars[0][0]['duration']))
+        duration_bar = duration_bar[duration_bar > 0]
+
+        swap_used_bar = next(iter(bars[0][1].values()))['node_memory_swap_used_bytes']/pow(2, 30)
+        swap_used_bar = swap_used_bar[swap_used_bar > 0]
+
+        memory_avail_bar = next(iter(bars[0][1].values()))['node_memory_available_bytes_node_memory_MemAvailable_bytes']/pow(2, 30)
+        memory_avail_bar = memory_avail_bar[memory_avail_bar > 0]
+
+        values = [i for sub in [mann_kendall_test(duration_bar), mann_kendall_test(swap_used_bar),
+                                mann_kendall_test(memory_avail_bar)] for i in sub]
+        print(["{0:0.3f}".format(i*24) for i in values], f'Scen. {i+1}')
+
+def direct_aging_rejuvenation():
+    concurrency_list = [1, 2, 4, 8, 16, 64]
+    AiO_iteration_to_use = [1, 4, 1, 4, 2, 1]
+    HA_iteration_to_use = [1,1,1,1,1,1]
+
+
+    print("All in One data")
+    print("RRT Aging | Rejuv || Swap Aging | Rejuv || Available Aging | Rejuv")
+    for i in range (6):
+        bars = get_experiment_data_bars(all_in_one_fld, concurrency_list[i], AiO_iteration_to_use[i])
+        duration_bar = bars[0][0]['duration']
+        valuable_points = duration_bar > 0
+        duration_bar = duration_bar[valuable_points]
+        if valuable_points[valuable_points==True].size < 10:
+            continue
+        rejuv_duration = bars[1][0]['duration']
+
+
+        swap_used_bar = next(iter(bars[0][1].values()))['node_memory_swap_used_bytes']/pow(2, 30)
+        swap_used_bar = swap_used_bar[valuable_points]
+        swap_used_rejuv = next(iter(bars[1][1].values()))['node_memory_swap_used_bytes'] / pow(2, 30)
+
+        memory_avail_bar = next(iter(bars[0][1].values()))['node_memory_available_bytes_node_memory_MemAvailable_bytes']/pow(2, 30)
+        memory_avail_bar = memory_avail_bar[valuable_points]
+        memory_avail_rejuv = next(iter(bars[1][1].values()))[
+                               'node_memory_available_bytes_node_memory_MemAvailable_bytes'] / pow(2, 30)
+
+        values = [i for sub in [aging_rejuv(duration_bar, rejuv_duration), aging_rejuv(swap_used_bar, swap_used_rejuv), aging_rejuv(memory_avail_bar, memory_avail_rejuv)] for i in sub]
+        print(["{0:0.3f}".format(i) for i in values], f'Scen. {i+7}')
+
+    print("Multinode data")
+    for i in range (6):
+        bars = get_experiment_data_bars(high_avail_fld, concurrency_list[i], HA_iteration_to_use[i])
+        duration_bar = bars[0][0]['duration']
+        valuable_points = duration_bar > 0
+        duration_bar = duration_bar[valuable_points]
+        if valuable_points[valuable_points==True].size < 10:
+            continue
+        rejuv_duration = bars[1][0]['duration']
+
+        if bars[1][1].values().__len__() == 0:
+            continue
+        swap_used_bar = next(iter(bars[0][1].values()))['node_memory_swap_used_bytes']/pow(2, 30)
+        swap_used_bar = swap_used_bar[valuable_points]
+        swap_used_rejuv = next(iter(bars[1][1].values()))['node_memory_swap_used_bytes'] / pow(2, 30)
+
+        memory_avail_bar = next(iter(bars[0][1].values()))['node_memory_available_bytes_node_memory_MemAvailable_bytes']/pow(2, 30)
+        memory_avail_bar = memory_avail_bar[valuable_points]
+        memory_avail_rejuv = next(iter(bars[1][1].values()))[
+                                 'node_memory_available_bytes_node_memory_MemAvailable_bytes'] / pow(2, 30)
+
+        values = [i for sub in [aging_rejuv(duration_bar, rejuv_duration),
+                                aging_rejuv(swap_used_bar, swap_used_rejuv), aging_rejuv(memory_avail_bar, memory_avail_rejuv)] for i in sub]
+        print(["{0:0.3f}".format(i) for i in values], f'Scen. {i+1}')
 
 
 if __name__ == "__main__":

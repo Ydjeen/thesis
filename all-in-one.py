@@ -5,6 +5,8 @@ from matplotlib import pyplot as plt
 
 from main import get_experiment_data_bars, get_experiment_metric
 
+connect_rejuv = True
+
 def get_concat_data(db):
     metr_concat = {}
     for node in db[0][1]:
@@ -35,12 +37,15 @@ def plot_all_in_one_conc1_2_4():
         for i in range(6):
             # rally_data = pd.concat([dbs[i][0][0], pd.DataFrame({"timestampt":[None]}), dbs[i][1][0]], ignore_index=True)
             rally_data = dbs_conc[i][0]
-            plt.plot(rally_data['hour'], rally_data["duration"], label=f"Concurrency {concurrencies[i]}", marker="o")
+            rally_data['hour'][rally_data['hour'] > 24] = 26
+            if connect_rejuv:
+                rally_data = rally_data.drop(24)
+            plt.plot(rally_data['hour'], rally_data["duration"], label=f"Sc. {i+7}", marker="o")
         ax = plt.gca()
         ax.set_ylim([-10, 550])
-        ax.set_xlim([0, 39])
-        plt.legend()
-        plt.ylabel("Average successful workload duration (sec)")
+        #ax.set_xlim([0, 39])
+        plt.legend(loc='upper center', bbox_to_anchor=(0.285, 1))
+        plt.ylabel("Average workload duration (sec)")
         plt.xlabel("Experiment duration (hour)")
         fig = plt.gcf()
         fig.savefig('fig/AiO_duration.pdf')
@@ -49,14 +54,17 @@ def plot_all_in_one_conc1_2_4():
         for i in range(6):
             # rally_data = pd.concat([dbs[i][0][0], pd.DataFrame({"timestampt":[None]}), dbs[i][1][0]], ignore_index=True)
             rally_data = dbs_conc[i][0]
-            plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Concurrency {concurrencies[i]}", marker="o")
-        plt.legend()
+            if connect_rejuv:
+                rally_data = rally_data.drop(24)
+            plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Sc. {i+7}", marker="o")
+        plt.legend(loc='upper center', bbox_to_anchor=(0.7, 1))
         plt.ylabel("Number of successful workload executions")
         plt.xlabel("Experiment duration (hour)")
         fig = plt.gcf()
         fig.savefig('fig/AiO_success.pdf')
         plt.show()
 
+        """
         for i in range(6):
             rally_data = dbs[i][0][0]
             rally_data_rej = dbs[i][1][0]
@@ -67,6 +75,7 @@ def plot_all_in_one_conc1_2_4():
         plt.ylabel("Change of workload duration (%)")
         plt.title("Change of workload duration in relation to the beginning of the experiment")
         plt.show()
+        
 
         for i in range(6):
             rally_data = dbs[i][0][0]
@@ -78,8 +87,55 @@ def plot_all_in_one_conc1_2_4():
         plt.ylabel("Change of successful workloads (%)")
         plt.title("Change of successful workloads in relation to the beginning of the experiment")
         plt.show()
-
+        """
     if plot_mem:
+        for i in range(3):
+            metric_data = dbs_conc[i][1]
+            control_node = list(metric_data.keys())[0]
+            metric_data = metric_data[control_node]
+            metric_data['hour'][metric_data['hour'] > 24] = 26
+            if connect_rejuv:
+                metric_data = metric_data.drop(24)
+            plt.plot(metric_data['hour'],
+                     metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"] / pow(2, 30),
+                     label=f"Sc. {i + 7}, RAM avail.", color=f"C{i}", marker='o')
+            plt.plot(metric_data['hour'], metric_data["node_memory_swap_used_bytes"] / pow(2, 30),
+                     label=f"Sc. {i + 7}, swap used", linestyle="dashed", color=f"C{i}", marker='v')
+        plt.grid()
+        plt.legend(loc='upper center', bbox_to_anchor=(0.285, 1))
+        plt.gcf().set_figwidth(12)
+        ax = plt.gca()
+        plt.ylabel("Average memory usage (GB)")
+        plt.xlabel("Scenario duration (hour)")
+        plt.grid()
+        fig = plt.gcf()
+        fig.savefig('fig/AiO_1_2_4_memory.pdf')
+        plt.show()
+
+        for i in range(3,6):
+            metric_data = dbs_conc[i][1]
+            control_node = list(metric_data.keys())[0]
+            metric_data = metric_data[control_node]
+            metric_data['hour'][metric_data['hour'] > 24] = 26
+            if connect_rejuv:
+                metric_data = metric_data.drop(24)
+            plt.plot(metric_data['hour'],
+                     metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"] / pow(2, 30),
+                     label=f"Sc. {i + 7}, RAM avail.", color=f"C{i-3}", marker='o')
+            plt.plot(metric_data['hour'], metric_data["node_memory_swap_used_bytes"] / pow(2, 30),
+                     label=f"Sc. {i + 7}, swap used", linestyle="dashed", color=f"C{i-3}", marker='v')
+        plt.grid()
+        plt.legend(loc='upper center', bbox_to_anchor=(0.2, 1))
+        plt.gcf().set_figwidth(12)
+        ax = plt.gca()
+        plt.ylabel("Average memory usage (GB)")
+        plt.xlabel("Scenario duration (hour)")
+        plt.grid()
+        fig = plt.gcf()
+        fig.savefig('fig/AiO_8_16_64_memory.pdf')
+        plt.show()
+
+
         for i in range(6):
             metric_data = dbs_conc[i][1]
             control_node = list(metric_data.keys())[0]
@@ -90,7 +146,7 @@ def plot_all_in_one_conc1_2_4():
         plt.legend(loc="lower center", ncol=2)
         ax = plt.gca()
         ax.set_ylim([0, 4])
-        plt.ylabel("Ram available (GB)")
+        plt.ylabel("Average ram available (GB)")
         plt.xlabel("Experiment duration (hour)")
         fig = plt.gcf()
         fig.savefig('fig/AiO_memory_avail.pdf')

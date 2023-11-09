@@ -6,6 +6,10 @@ from matplotlib import pyplot as plt
 
 from main import get_experiment_metric, get_experiment_data_bars, get_bar_change, extract_rally_output
 
+scenario_word = "Scenario"
+scenario_duration = "Scenario duration (hour)"
+connect_rejuv=True
+
 def plot_HA_conc1_2_4():
     db1 = get_experiment_data_bars('high-availability/', 1, iteration=1, window=20)
     db2 = get_experiment_data_bars('high-availability/', 2, iteration=1, window=20)
@@ -37,23 +41,49 @@ def plot_HA_conc1_2_4():
     for i in range(3):
         #rally_data = pd.concat([dbs[i][0][0], pd.DataFrame({"timestampt":[None]}), dbs[i][1][0]], ignore_index=True)
         rally_data = dbs_conc[i][0]
-        plt.plot(rally_data['hour'], rally_data["duration"], label=f"Experiment {i}", marker="o")
+        rally_data['hour'][rally_data['hour'] > 24] = 26
+        if connect_rejuv:
+            rally_data=rally_data.drop(24)
+        plt.plot(rally_data['hour'], rally_data["duration"], label=f"Scenario {i+1}", marker="o")
     plt.grid()
     plt.legend()
     plt.ylabel("Average workload duration (sec)")
-    plt.xlabel("Experiment duration (hour)")
+    plt.xlabel("Scenario duration (hour)")
     plt.grid()
     fig = plt.gcf()
     fig.savefig('fig/HA_1_2_4_duration.pdf')
     plt.show()
 
     for i in range(3):
+        metric_data = dbs_conc[i][1]
+        control_node = list(metric_data.keys())[0]
+        metric_data = metric_data[control_node]
+        metric_data['hour'][metric_data['hour'] > 24] = 26
+        if connect_rejuv:
+            metric_data=metric_data.drop(24)
+        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Scenario {i+1}, RAM available", color=f"C{i}", marker='o')
+        plt.plot(metric_data['hour'], metric_data["node_memory_swap_used_bytes"]/pow(2,30), label=f"Scenario {i+1}, swap used", linestyle="dashed", color=f"C{i}", marker='v')
+    plt.grid()
+    plt.legend(loc='center left', bbox_to_anchor=(0.0, 0.32))
+    ax = plt.gca()
+    ax.set_ylim([0, 4.5])
+    plt.ylabel("Average memory usage (GB)")
+    plt.xlabel("Scenario duration (hour)")
+    plt.grid()
+    fig = plt.gcf()
+    fig.savefig('fig/HA_1_2_4_memory.pdf')
+    plt.show()
+
+    return
+
+    for i in range(3):
         rally_data = dbs[i][0][0]
-        plt.plot(rally_data['hour'], rally_data["duration"].pct_change().cumsum(), label=f"Experiment {i}")
+        rally_data['hour'][rally_data['hour'] > 24] = 26
+        plt.plot(rally_data['hour'], rally_data["duration"].pct_change().cumsum(), label=f"Scenario {i}")
     plt.grid()
     plt.legend()
     plt.ylabel("Change of workload duration (%)")
-    plt.title("Change of workload duration in relation to the beginning of the experiment")
+    plt.title("Change of workload duration in relation to the beginning of the scenario")
     plt.grid()
     plt.show()
 
@@ -61,30 +91,14 @@ def plot_HA_conc1_2_4():
         metric_data = dbs[i][0][1]
         control_node = list(metric_data.keys())[0]
         metric_data = metric_data[control_node]
-        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Experiment {i}")
+        metric_data['hour'][metric_data['hour'] > 24] = 26
+        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Scenario {i}")
     plt.grid()
     plt.legend()
     ax = plt.gca()
     ax.set_ylim([0, 6])
     plt.ylabel("Control node, RAM available (GB)")
     plt.grid()
-    plt.show()
-
-    for i in range(3):
-        metric_data = dbs_conc[i][1]
-        control_node = list(metric_data.keys())[0]
-        metric_data = metric_data[control_node]
-        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Exp. {i+1}, RAM available", color=f"C{i}", marker='o')
-        plt.plot(metric_data['hour'], metric_data["node_memory_swap_used_bytes"]/pow(2,30), label=f"Exp. {i+1}, swap used", linestyle="dashed", color=f"C{i}", marker='v')
-    plt.grid()
-    plt.legend()
-    ax = plt.gca()
-    ax.set_ylim([0, 4.5])
-    plt.ylabel("Memory usage (GB)")
-    plt.xlabel("Experiment duration (hour)")
-    plt.grid()
-    fig = plt.gcf()
-    fig.savefig('fig/HA_1_2_4_memory.pdf')
     plt.show()
 
     for i in range(3):
@@ -100,7 +114,7 @@ def plot_HA_conc1_2_4():
 
     for i in range(3):
         rally_data = dbs[i][0][0]
-        plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Experiment {concurrencies[i]}")
+        plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Scenario {concurrencies[i]}")
     plt.grid()
     plt.legend()
     plt.ylabel("Amount of successfull workloads/h")
@@ -118,8 +132,8 @@ def plot_HA_conc8():
     plt.plot(control_df['hour'], control_df["node_memory_swap_used_bytes"] / pow(2, 30), label="Swap used")
     plt.axvline(x=18.5, color='r', label='OpenStack fails')
     plt.grid()
-    plt.xlabel("Experiment duration (hour)")
-    plt.ylabel("Memory (GB)")
+    plt.xlabel("Scenario duration (hour)")
+    plt.ylabel("Memory usage (GB)")
     plt.legend()
     fig = plt.gcf()
     fig.savefig('fig/HA_8_memory.pdf')
@@ -132,8 +146,8 @@ def plot_HA_conc8():
     plt.axvline(x=18.5, color='r', label='OpenStack fails')
     plt.grid()
 
-    plt.xlabel("Experiment duration (hour)")
-    plt.ylabel("Physical space left on node (%)")
+    plt.xlabel("Scenario duration (hour)")
+    plt.ylabel("Free physical space left (%)")
     plt.legend()
     fig = plt.gcf()
     fig.savefig('fig/HA_8_space.pdf')
@@ -144,9 +158,9 @@ def plot_HA_conc8():
     control_df = m[list(m.keys())[0]]
     plt.figure().set_figwidth(12)
     plt.bar(s[0][0]['hour'], s[0][0]["duration"])
-    plt.axvline(x=18.5, color='r', label='OpenStack fails')
+    plt.axvline(x=19, color='r', label='OpenStack fails')
     plt.grid()
-    plt.xlabel("Experiment duration (hour)")
+    plt.xlabel("Scenario duration (hour)")
     plt.ylabel("Average workload duration (sec)")
     plt.legend()
     fig = plt.gcf()
@@ -171,21 +185,21 @@ def plot_HA_conc16():
     for i in range(1):
         #rally_data = pd.concat([dbs[i][0][0], pd.DataFrame({"timestampt":[None]}), dbs[i][1][0]], ignore_index=True)
         rally_data = dbs_conc[i][0]
-        plt.plot(rally_data['hour'], rally_data["duration"], label=f"Experiment {i}", marker="o")
+        plt.plot(rally_data['hour'], rally_data["duration"], label=f"Scenario {i}", marker="o")
     plt.grid()
     plt.legend()
     plt.ylabel("Average workload duration (sec)")
-    plt.xlabel("Experiment duration (hour)")
+    plt.xlabel("Scenario duration (hour)")
     plt.grid()
     plt.show()
 
     for i in range(1):
         rally_data = dbs[i][0][0]
-        plt.plot(rally_data['hour'], rally_data["duration"].pct_change().cumsum(), label=f"Experiment {i}")
+        plt.plot(rally_data['hour'], rally_data["duration"].pct_change().cumsum(), label=f"Scenario {i}")
     plt.grid()
     plt.legend()
     plt.ylabel("Change of workload duration (%)")
-    plt.title("Change of workload duration in relation to the beginning of the experiment")
+    plt.title("Change of workload duration in relation to the beginning of the scenario")
     plt.grid()
     plt.show()
 
@@ -193,7 +207,7 @@ def plot_HA_conc16():
         metric_data = dbs[i][0][1]
         control_node = list(metric_data.keys())[0]
         metric_data = metric_data[control_node]
-        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Experiment {i}")
+        plt.plot(metric_data['hour'], metric_data["node_memory_available_bytes_node_memory_MemAvailable_bytes"]/pow(2,30), label=f"Scenario {i}")
     plt.grid()
     plt.legend()
     ax = plt.gca()
@@ -213,7 +227,7 @@ def plot_HA_conc16():
     ax = plt.gca()
     ax.set_ylim([0, 4.5])
     plt.ylabel("Memory usage (GB)")
-    plt.xlabel("Experiment duration (hour)")
+    plt.xlabel(scenario_duration)
     plt.grid()
     plt.show()
 
@@ -230,7 +244,7 @@ def plot_HA_conc16():
 
     for i in range(1):
         rally_data = dbs_conc[0][0]
-        plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Experiment {concurrencies[i]}", marker="o")
+        plt.plot(rally_data['hour'], rally_data["successful_runs"], label=f"Scenario {concurrencies[i]}", marker="o")
     plt.grid()
     plt.legend()
     plt.ylabel("Amount of successfull workloads/h")
@@ -261,7 +275,7 @@ def plot_HA_conc16():
                   data["failed_runs"],
                   labels=["Successfull workloads", "Failed workloads"])
     plt.ylabel("Amount of workloads executed")
-    plt.xlabel("Experiment duration (min)")
+    plt.xlabel("Scenario duration (min)")
     plt.legend()
     plt.grid()
     fig = plt.gcf()
@@ -286,7 +300,7 @@ def plot_HA_conc16():
                   data["failed_runs"],
                   labels=["Successfull workloads", "Failed workloads"])
     plt.ylabel("Amount of workloads executed")
-    plt.xlabel("Experiment duration after rejuvenation (min)")
+    plt.xlabel("Scenario duration after rejuvenation (min)")
     plt.legend()
     plt.grid()
     fig = plt.gcf()
@@ -311,12 +325,12 @@ def plot_HA_conc64():
         time = s[i][0]['hour']
         if s[i][0]['hour'][0]>26.5:
             time = s[i][0]['hour'] - (s[i][0]['hour'][0]-26.5)
-        plt.bar(time, duration_change[i], label="_" * i + "Duration of workload", color='C0')
-        markerline, stemlines, baseline = plt.stem(time, success_rate_change[i], label="_" * i + "Successfull workload executions", linefmt="C3")
+        plt.bar(time, duration_change[i], label="_" * i + "Average workload duration", color='C0')
+        markerline, stemlines, baseline = plt.stem(time, success_rate_change[i], label="_" * i + "Amount of successfull workload executions", linefmt="C3")
         plt.setp(stemlines, linewidth=2)
-    plt.ylabel("Relative to the start of the experiment (%)")
-    plt.xlabel("Experiment duration (hour)")
-    plt.legend()
+    plt.ylabel(f"Relative to the start of the {scenario_word} (%)")
+    plt.xlabel(scenario_duration)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.6, 1))
     plt.grid()
     fig = plt.gcf()
     fig.savefig('fig/HA_64_dur_succ.pdf')
@@ -372,7 +386,7 @@ def plot_HA_conc64():
 
     plt.stackplot(time, succ, fails, labels=["Successfull workloads", "Failed workloads"])
     plt.ylabel("Amount of workloads executed per hour")
-    plt.xlabel("Experiment duration (hour)")
+    plt.xlabel(scenario_duration)
     plt.legend()
     plt.grid()
     fig = plt.gcf()
@@ -384,17 +398,17 @@ def plot_HA_conc64():
     control_df16 = m16[list(m16.keys())[0]]
     control_df64 = m64[list(m64.keys())[0]]
 
-    control_df16 = control_df16[~((control_df16['hour'] > 25.5) & (control_df16['hour'] < 28))]
-    control_df64 = control_df64[~((control_df64['hour'] > 25.5) & (control_df64['hour'] < 32))]
+    control_df16 = control_df16[~((control_df16['hour'] > 26) & (control_df16['hour'] < 28))]
+    control_df64 = control_df64[~((control_df64['hour'] > 26) & (control_df64['hour'] < 32))]
 
-    second_part = control_df16['hour'][control_df16['hour']>25.5]
-    control_df16['hour'][control_df16['hour']>25.5] = second_part - (second_part.min() - 26.5)
+    second_part = control_df16['hour'][control_df16['hour']>26]
+    control_df16['hour'][control_df16['hour']>26] = second_part - (second_part.min() - 26.5)
     skip = control_df16.loc[1555]
     control_df16 = control_df16[control_df16['hour']<28]
     control_df16.loc[1555] = skip
     control_df16 = control_df16.sort_index()
-    second_part = control_df64['hour'][control_df64['hour']>25.5]
-    control_df64['hour'][control_df64['hour']>25.5] = second_part - (second_part.min() - 26.5)
+    second_part = control_df64['hour'][control_df64['hour']>26]
+    control_df64['hour'][control_df64['hour']>26] = second_part - (second_part.min() - 26.5)
     #control_df64 = control_df64[control_df64['hour']<27.5]
 
     plt.figure().set_figwidth(12)
@@ -408,13 +422,13 @@ def plot_HA_conc64():
 
     plt.plot(control_df64['hour'], control_df64["node_memory_available_bytes_node_memory_MemAvailable_bytes"] / pow(2, 30),
              label="Scenario#6, RAM available", color="C1")
-    plt.plot(control_df64['hour'], control_df64["node_memory_swap_used_bytes"] / pow(2, 30), label="Scenario#6, Swap used", color="C6")
+    plt.plot(control_df64['hour'], control_df64["node_memory_swap_used_bytes"] / pow(2, 30), label=scenario_word+"#6, Swap used", color="C6")
     plt.axvline(x=14, color='r', label='Scenario#6, OpenStack fails')
 
     plt.grid()
-    plt.xlabel("Experiment duration (hour)")
-    plt.ylabel("Memory (GB)")
-    plt.legend()
+    plt.xlabel(scenario_duration)
+    plt.ylabel("Average memory usage (GB)")
+    plt.legend(loc='upper center', bbox_to_anchor=(0.29, 1))
     plt.tight_layout()
     fig = plt.gcf()
     fig.savefig('fig/HA_16_64_memory.pdf')
@@ -425,4 +439,4 @@ if not os.path.exists("fig"):
 plt.rcParams['font.size'] = 16
 plt.rcParams['axes.grid'] = True
 plt.rcParams['figure.figsize'][0] = 12
-plot_HA_conc16()
+plot_HA_conc64()
